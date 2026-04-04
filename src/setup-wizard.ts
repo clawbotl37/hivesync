@@ -8,15 +8,15 @@ import { BridgeConfig } from './types';
 import { logger } from './utils/logger';
 
 export async function runSetupWizard(): Promise<void> {
-  console.log(chalk.cyan('\n=== Waku Bridge Setup Wizard ===\n'));
-  console.log(chalk.gray('This wizard will help you configure your Waku Bridge.\n'));
+  console.log(chalk.cyan('\n=== HiveSync Setup Wizard ===\n'));
+  console.log(chalk.gray('This wizard will help you configure HiveSync with real-time Obsidian sync.\n'));
 
   const answers = await inquirer.prompt([
     {
       type: 'input',
       name: 'agentName',
       message: 'What is your agent name?',
-      default: 'Kai Agent',
+      default: 'Kai Assistant',
     },
     {
       type: 'input',
@@ -32,23 +32,45 @@ export async function runSetupWizard(): Promise<void> {
     },
     {
       type: 'confirm',
-      name: 'enableObsidian',
-      message: 'Enable Obsidian vault sync?',
+      name: 'enableRealtimeSync',
+      message: 'Enable real-time Obsidian vault sync?',
       default: true,
     },
     {
       type: 'input',
       name: 'obsidianPath',
       message: 'Path to your Obsidian vault:',
-      when: (answers) => answers.enableObsidian,
+      when: (answers) => answers.enableRealtimeSync,
       default: path.join(process.cwd(), 'obsidian-vault'),
+      validate: (input: string) => {
+        if (!input.trim()) {
+          return 'Obsidian vault path is required';
+        }
+        return true;
+      },
+    },
+    {
+      type: 'confirm',
+      name: 'createVaultIfMissing',
+      message: 'Create Obsidian vault if it doesn\'t exist?',
+      when: (answers) => answers.enableRealtimeSync,
+      default: true,
     },
     {
       type: 'number',
-      name: 'syncInterval',
-      message: 'Sync interval (minutes):',
-      default: 5,
-      when: (answers) => answers.enableObsidian,
+      name: 'syncDebounceDelay',
+      message: 'Sync debounce delay (milliseconds):',
+      when: (answers) => answers.enableRealtimeSync,
+      default: 1000,
+      validate: (input: number) => {
+        if (input < 100) {
+          return 'Delay must be at least 100ms';
+        }
+        if (input > 10000) {
+          return 'Delay must be at most 10000ms';
+        }
+        return true;
+      },
     },
     {
       type: 'confirm',
@@ -74,7 +96,7 @@ export async function runSetupWizard(): Promise<void> {
       agentId: answers.agentId,
       agentName: answers.agentName,
       storagePath: answers.storagePath,
-      syncInterval: answers.enableObsidian ? answers.syncInterval : 0,
+      syncInterval: answers.enableRealtimeSync ? 1 : 0, // 1 minute interval for periodic checks
       waku: {
         listenAddresses: ['/ip4/0.0.0.0/tcp/0/ws'],
         bootstrapNodes: answers.useCustomNodes
@@ -83,11 +105,29 @@ export async function runSetupWizard(): Promise<void> {
               '/dns4/node-01.do-ams3.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ',
               '/dns4/node-01.gc-us-central1-a.wakuv2.test.status.im/tcp/443/wss/p2p/16Uiu2HAmJb2e28qLXxT5kZxVUUoJt72EMzNGXB47Rxx5hw3q4YjS',
             ],
-        pubsubTopic: '/waku/2/default-waku/proto',
+        pubsubTopic: '/waku/2/hivesync/proto',
         keepAlive: true,
         maxPeers: 10,
       },
     };
+
+    // Add Obsidian configuration if enabled
+    if (answers.enableRealtimeSync) {
+      (config as any).obsidian = {
+        vaultPath: answers.obsidianPath,
+        syncDebounceDelay: answers.syncDebounceDelay,
+        autoSync: true,
+        ignorePatterns: [
+          '.trash/**',
+          '.obsidian/**',
+          '.git/**',
+          '*.tmp',
+          '*.swp',
+          '*.swo',
+          '*.DS_Store'
+        ],
+      };
+    }
 
     // Create directories
     const configDir = path.join(process.cwd(), 'config');
@@ -111,39 +151,74 @@ export async function runSetupWizard(): Promise<void> {
     // Create .env file if needed
     const envPath = path.join(process.cwd(), '.env');
     if (!fs.existsSync(envPath)) {
-      const envContent = `# Waku Bridge Configuration
+      const envContent = `# HiveSync Configuration
 AGENT_ID=${answers.agentId}
 AGENT_NAME="${answers.agentName}"
 STORAGE_PATH=${answers.storagePath}
-OBSIDIAN_PATH=${answers.enableObsidian ? answers.obsidianPath : ''}
-SYNC_INTERVAL=${answers.enableObsidian ? answers.syncInterval : 0}
+OBSIDIAN_PATH=${answers.enableRealtimeSync ? answers.obsidianPath : ''}
+SYNC_DEBOUNCE_DELAY=${answers.enableRealtimeSync ? answers.syncDebounceDelay : 1000}
 LOG_LEVEL=info
 `;
       fs.writeFileSync(envPath, envContent, 'utf-8');
     }
 
-    // Create example Obsidian vault if enabled
-    if (answers.enableObsidian && !fs.existsSync(answers.obsidianPath)) {
+    // Create Obsidian vault if enabled and doesn't exist
+    if (answers.enableRealtimeSync && answers.createVaultIfMissing && !fs.existsSync(answers.obsidianPath)) {
       fs.mkdirSync(answers.obsidianPath, { recursive: true });
       
+      // Create .obsidian directory with basic config
+      const obsidianDir = path.join(answers.obsidianPath, '.obsidian');
+      fs.mkdirSync(obsidianDir, { recursive: true });
+      
+      // Create basic Obsidian config
+      const obsidianConfig = {
+        "attachmentFolderPath": "./attachments",
+        "useMarkdownLinks": true,
+        "newLinkFormat": "relative",
+        "showUnsupportedFiles": true,
+        "strictLineBreaks": false,
+        "readableLineLength": true,
+        "showLineNumber": false,
+        "showIndentGuide": true,
+        "trashOption": "local",
+        "alwaysUpdateLinks": true,
+        "newFileLocation": "current",
+        "showFrontmatter": true,
+        "livePreview": true
+      };
+      
+      fs.writeFileSync(
+        path.join(obsidianDir, 'app.json'),
+        JSON.stringify(obsidianConfig, null, 2),
+        'utf-8'
+      );
+      
       // Create a sample note
-      const sampleNote = `# Welcome to Obsidian Sync
+      const sampleNote = `# Welcome to HiveSync Obsidian
 
-This is a sample note that will be synced between your agents.
+This vault is automatically synchronized with your other agents using HiveSync.
 
 ## Features
-- Real-time synchronization
-- End-to-end encryption
-- Conflict resolution
-- Version history
+- **Real-time synchronization**: Changes are synced immediately
+- **End-to-end encryption**: All data is encrypted in transit
+- **Conflict resolution**: Automatic handling of merge conflicts
+- **Version history**: Track changes over time
 
 ## Getting Started
 1. Add more notes to this vault
-2. Connect another agent
-3. Watch them sync automatically!`;
+2. Connect another agent with HiveSync
+3. Watch changes sync automatically in real-time!
+
+## Tips
+- Use \`.trash/\` folder for notes you want to delete
+- The \`.obsidian/\` folder contains app settings
+- All \`.md\` files are automatically synced
+
+## Support
+For help, visit: https://github.com/clawbotl37/hivesync`;
       
       fs.writeFileSync(
-        path.join(answers.obsidianPath, 'Welcome.md'),
+        path.join(answers.obsidianPath, 'Welcome to HiveSync.md'),
         sampleNote,
         'utf-8'
       );
@@ -157,24 +232,32 @@ This is a sample note that will be synced between your agents.
     console.log(chalk.white(`Agent Name: ${answers.agentName}`));
     console.log(chalk.white(`Storage: ${answers.storagePath}`));
     
-    if (answers.enableObsidian) {
+    if (answers.enableRealtimeSync) {
       console.log(chalk.white(`Obsidian Vault: ${answers.obsidianPath}`));
-      console.log(chalk.white(`Sync Interval: ${answers.syncInterval} minutes`));
+      console.log(chalk.white(`Real-time Sync: Enabled`));
+      console.log(chalk.white(`Sync Debounce: ${answers.syncDebounceDelay}ms`));
+      
+      if (answers.createVaultIfMissing && !fs.existsSync(answers.obsidianPath)) {
+        console.log(chalk.green(`✓ Created Obsidian vault at: ${answers.obsidianPath}`));
+      }
     }
     
     console.log(chalk.white(`Waku Nodes: ${config.waku.bootstrapNodes.length}`));
     
     console.log(chalk.cyan('\n=== Next Steps ===\n'));
-    console.log(chalk.white('1. Start the bridge:'));
+    console.log(chalk.white('1. Start HiveSync with real-time sync:'));
     console.log(chalk.yellow('   hivesync start\n'));
     
-    console.log(chalk.white('2. Test connectivity:'));
-    console.log(chalk.yellow('   hivesync test\n'));
+    console.log(chalk.white('2. Check sync status:'));
+    console.log(chalk.yellow('   hivesync sync-status\n'));
     
-    console.log(chalk.white('3. Send a test message:'));
-    console.log(chalk.yellow('   hivesync send <agent-id> "Hello!"\n'));
+    console.log(chalk.white('3. Test real-time sync:'));
+    console.log(chalk.yellow('   Create/edit a note in your Obsidian vault\n'));
     
-    console.log(chalk.white('4. For help:'));
+    console.log(chalk.white('4. Connect another agent:'));
+    console.log(chalk.yellow('   Run setup on another machine and use the same Waku topic\n'));
+    
+    console.log(chalk.white('5. For help:'));
     console.log(chalk.yellow('   hivesync --help\n'));
 
     // Create setup completion marker

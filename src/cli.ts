@@ -14,7 +14,7 @@ const program = new Command();
 // ASCII Art Banner
 console.log(
   chalk.blue(
-    figlet.textSync('Waku Bridge', {
+    figlet.textSync('HiveSync', {
       font: 'Standard',
       horizontalLayout: 'default',
       verticalLayout: 'default',
@@ -24,8 +24,8 @@ console.log(
 
 console.log(
   boxen(
-    chalk.green('Secure decentralized communication for Kai and agents\n') +
-      chalk.yellow('🔗 End-to-end encrypted • 📝 Obsidian sync • 🤖 Multi-agent'),
+    chalk.green('Real-time secure communication for Kai and agents\n') +
+      chalk.yellow('🔗 End-to-end encrypted • 📝 Real-time Obsidian sync • 🤖 Multi-agent'),
     {
       padding: 1,
       margin: 1,
@@ -37,20 +37,26 @@ console.log(
 
 program
   .name('hivesync')
-  .description('Secure Waku-based communication bridge for Kai and agents')
-  .version('1.0.0');
+  .description('Real-time secure HiveSync communication bridge for Kai and agents')
+  .version('1.1.0');
 
 program
   .command('start')
-  .description('Start the Waku bridge')
+  .description('Start the HiveSync bridge with real-time sync')
   .option('-c, --config <path>', 'Configuration file path', './config/hivesync.yaml')
   .option('-d, --daemon', 'Run as daemon in background')
   .option('-v, --verbose', 'Enable verbose logging')
+  .option('--no-sync', 'Disable real-time Obsidian sync')
   .action(async (options) => {
     try {
-      logger.info('Starting Waku Bridge...');
+      logger.info('Starting HiveSync Bridge with real-time sync...');
       
       const config = await loadConfig(options.config);
+      
+      // Override sync if disabled via CLI
+      if (options.sync === false) {
+        config.syncInterval = 0;
+      }
       
       const bridge = new BridgeManager(config);
       const started = await bridge.start();
@@ -88,19 +94,36 @@ program
 
 program
   .command('status')
-  .description('Check bridge status')
+  .description('Check bridge and sync status')
   .action(async () => {
     try {
       const config = await loadConfig();
       const bridge = new BridgeManager(config);
+      await bridge.start();
+      
       const status = bridge.getStatus();
+      const syncStatus = await bridge.getSyncStatus();
       
       console.log(chalk.cyan('\n=== Bridge Status ===\n'));
       console.log(chalk.white(`Agent: ${status.agentName} (${status.agentId})`));
       console.log(chalk.white(`Running: ${status.running ? '✅' : '❌'}`));
-      console.log(chalk.white(`Waku Connected: ${status.waku.connected ? '✅' : '❌'}`));
-      console.log(chalk.white(`Peers: ${status.waku.peers}`));
-      console.log(chalk.white(`Obsidian Sync: ${status.obsidianSync ? '✅' : '❌'}`));
+      console.log(chalk.white(`HiveSync Connected: ${status.hivesync.connected ? '✅' : '❌'}`));
+      console.log(chalk.white(`Peers: ${status.hivesync.peers}`));
+      console.log(chalk.white(`Real-time Sync: ${status.realTimeSync ? '✅' : '❌'}`));
+      console.log(chalk.white(`File Watching: ${status.fileWatching ? '✅' : '❌'}`));
+      
+      if (syncStatus.length > 0) {
+        console.log(chalk.cyan('\n=== Sync Status ===\n'));
+        syncStatus.forEach((state: any, index: number) => {
+          console.log(chalk.white(`${index + 1}. Agent: ${state.agentId}`));
+          console.log(chalk.gray(`   Last Sync: ${state.lastSync.toLocaleString()}`));
+          console.log(chalk.gray(`   Notes Synced: ${state.notesSynced}`));
+          console.log(chalk.gray(`   Conflicts: ${state.conflicts}`));
+          console.log();
+        });
+      }
+      
+      await bridge.stop();
     } catch (error) {
       logger.error('Failed to get status:', error);
     }
@@ -126,19 +149,58 @@ program
 
 program
   .command('sync')
-  .description('Initiate manual sync with all agents')
+  .description('Trigger manual sync with all agents')
   .action(async () => {
     try {
       const config = await loadConfig();
       const bridge = new BridgeManager(config);
       await bridge.start();
       
-      await bridge.sendCommand('broadcast', 'sync');
-      logger.success('Sync command sent to all agents');
+      await bridge.triggerSync();
+      logger.success('Manual sync triggered with all agents');
       
       await bridge.stop();
     } catch (error) {
       logger.error('Failed to sync:', error);
+    }
+  });
+
+program
+  .command('sync-status')
+  .description('Show detailed sync status')
+  .action(async () => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+      
+      const syncStatus = await bridge.getSyncStatus();
+      
+      if (syncStatus.length === 0) {
+        console.log(chalk.yellow('No sync status available'));
+      } else {
+        console.log(chalk.cyan('\n=== Sync Status ===\n'));
+        syncStatus.forEach((state: any, index: number) => {
+          console.log(chalk.white(`${index + 1}. Agent: ${state.agentId}`));
+          console.log(chalk.gray(`   Last Sync: ${state.lastSync.toLocaleString()}`));
+          console.log(chalk.gray(`   Notes Synced: ${state.notesSynced}`));
+          console.log(chalk.gray(`   Conflicts: ${state.conflicts}`));
+          const timeSince = Date.now() - state.lastSync.getTime();
+          const minutes = Math.floor(timeSince / 60000);
+          if (minutes < 5) {
+            console.log(chalk.green(`   Status: Synced ${minutes} minute${minutes === 1 ? '' : 's'} ago`));
+          } else if (minutes < 60) {
+            console.log(chalk.yellow(`   Status: ${minutes} minutes since last sync`));
+          } else {
+            console.log(chalk.red(`   Status: ${Math.floor(minutes / 60)} hours since last sync`));
+          }
+          console.log();
+        });
+      }
+      
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to get sync status:', error);
     }
   });
 
@@ -163,13 +225,22 @@ program
   });
 
 program
-  .command('test')
-  .description('Run connectivity test')
+  .command('watch')
+  .description('Start file watcher for real-time sync')
   .action(async () => {
-    console.log(chalk.cyan('\n=== Connectivity Test ===\n'));
+    console.log(chalk.cyan('\n=== Starting File Watcher ===\n'));
+    console.log(chalk.white('File watcher is automatically started with real-time sync.'));
+    console.log(chalk.white('Use "hivesync start" to start the full bridge.'));
+  });
+
+program
+  .command('test')
+  .description('Run connectivity and sync test')
+  .action(async () => {
+    console.log(chalk.cyan('\n=== Connectivity & Sync Test ===\n'));
     
-    // Test Waku connectivity
-    console.log(chalk.white('1. Testing Waku network...'));
+    // Test HiveSync connectivity
+    console.log(chalk.white('1. Testing HiveSync network...'));
     try {
       const config = await loadConfig();
       const bridge = new BridgeManager(config);
@@ -177,11 +248,12 @@ program
       
       if (started) {
         const status = bridge.getStatus();
-        console.log(chalk.green(`   ✅ Connected to Waku network`));
-        console.log(chalk.white(`   Peer ID: ${status.waku.peerId}`));
-        console.log(chalk.white(`   Active peers: ${status.waku.peers}`));
+        console.log(chalk.green(`   ✅ Connected to HiveSync network`));
+        console.log(chalk.white(`   Peer ID: ${status.hivesync.peerId}`));
+        console.log(chalk.white(`   Active peers: ${status.hivesync.peers}`));
+        console.log(chalk.white(`   Real-time sync: ${status.realTimeSync ? 'Enabled' : 'Disabled'}`));
       } else {
-        console.log(chalk.red('   ❌ Failed to connect to Waku network'));
+        console.log(chalk.red('   ❌ Failed to connect to HiveSync network'));
       }
       
       await bridge.stop();
@@ -201,7 +273,19 @@ program
       console.log(chalk.red(`   ❌ Error: ${error.message}`));
     }
     
-    console.log(chalk.white('\n3. Testing encryption...'));
+    console.log(chalk.white('\n3. Testing file system monitoring...'));
+    try {
+      const fs = require('fs');
+      const tempFile = '/tmp/hivesync-test.txt';
+      fs.writeFileSync(tempFile, 'test');
+      fs.readFileSync(tempFile, 'utf-8');
+      fs.unlinkSync(tempFile);
+      console.log(chalk.green('   ✅ File system access working'));
+    } catch (error) {
+      console.log(chalk.red(`   ❌ Error: ${error.message}`));
+    }
+    
+    console.log(chalk.white('\n4. Testing encryption...'));
     try {
       const crypto = require('crypto');
       const keyPair = crypto.generateKeyPairSync('rsa', {

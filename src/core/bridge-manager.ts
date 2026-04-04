@@ -1,34 +1,34 @@
-import { HiveSync } from './hivesync';
+import { HiveSync } from './hivesync-bridge';
 import { StorageManager } from '../storage/storage-manager';
-import { ObsidianSyncManager } from '../sync/obsidian-sync';
+import { RealTimeSyncManager } from '../sync/real-time-sync';
 import { BridgeConfig, AgentIdentity, Message, MessageType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 
 export class BridgeManager {
   private config: BridgeConfig;
-  private wakuBridge: HiveSync;
+  private hivesync: HiveSync;
   private storage: StorageManager;
-  private obsidianSync: ObsidianSyncManager | null = null;
+  private realTimeSync: RealTimeSyncManager | null = null;
   private isRunning: boolean = false;
 
   constructor(config: BridgeConfig) {
     this.config = config;
-    this.wakuBridge = new HiveSync(config);
+    this.hivesync = new HiveSync(config);
     this.storage = new StorageManager(config.storagePath);
   }
 
   async start(): Promise<boolean> {
     try {
-      console.log('Starting Waku Bridge Manager...');
+      console.log('Starting HiveSync Bridge Manager...');
 
       // Initialize storage
       await this.storage.initialize();
 
-      // Initialize Waku bridge
-      const wakuStarted = await this.wakuBridge.initialize();
-      if (!wakuStarted) {
-        throw new Error('Failed to initialize Waku bridge');
+      // Initialize HiveSync bridge
+      const hivesyncStarted = await this.hivesync.initialize();
+      if (!hivesyncStarted) {
+        throw new Error('Failed to initialize HiveSync bridge');
       }
 
       // Register this agent
@@ -37,19 +37,19 @@ export class BridgeManager {
       // Setup message handlers
       this.setupMessageHandlers();
 
-      // Initialize Obsidian sync if vault path is provided
+      // Initialize real-time Obsidian sync if vault path is provided
       if (this.config.syncInterval > 0) {
-        // For now, we'll create a dummy vault path
-        // In real usage, this would be provided by the user
-        const vaultPath = '/tmp/obsidian-vault';
-        this.obsidianSync = new ObsidianSyncManager(this.wakuBridge, this.storage, vaultPath);
-        await this.obsidianSync.startSync(this.config.syncInterval);
+        // For real-time sync, we need a vault path
+        // This would typically come from config.obsidian.vaultPath
+        const vaultPath = this.config['obsidian']?.['vaultPath'] || '/tmp/obsidian-vault';
+        this.realTimeSync = new RealTimeSyncManager(this.hivesync, this.storage, vaultPath);
+        await this.realTimeSync.start();
       }
 
       this.isRunning = true;
       console.log('Bridge Manager started successfully');
       console.log('Agent ID:', this.config.agentId);
-      console.log('Status:', this.wakuBridge.getStatus());
+      console.log('Status:', this.hivesync.getStatus());
 
       return true;
     } catch (error) {
@@ -62,11 +62,11 @@ export class BridgeManager {
   async stop(): Promise<void> {
     console.log('Stopping Bridge Manager...');
 
-    if (this.obsidianSync) {
-      await this.obsidianSync.stopSync();
+    if (this.realTimeSync) {
+      await this.realTimeSync.stop();
     }
 
-    await this.wakuBridge.disconnect();
+    await this.hivesync.disconnect();
     await this.storage.close();
 
     this.isRunning = false;
@@ -100,7 +100,7 @@ export class BridgeManager {
 
   private setupMessageHandlers(): void {
     // Handle text messages
-    this.wakuBridge.onMessage(MessageType.TEXT, async (message) => {
+    this.hivesync.onMessage(MessageType.TEXT, async (message) => {
       console.log(`Text message from ${message.sender}: ${message.content.text}`);
       await this.storage.saveMessage(message);
       
@@ -111,13 +111,13 @@ export class BridgeManager {
     });
 
     // Handle command messages
-    this.wakuBridge.onMessage(MessageType.COMMAND, async (message) => {
+    this.hivesync.onMessage(MessageType.COMMAND, async (message) => {
       console.log(`Command from ${message.sender}: ${message.content.command}`);
       await this.handleCommand(message);
     });
 
     // Handle ACK messages
-    this.wakuBridge.onMessage(MessageType.ACK, async (message) => {
+    this.hivesync.onMessage(MessageType.ACK, async (message) => {
       console.log(`ACK received for message: ${message.content.originalMessageId}`);
     });
   }
@@ -127,7 +127,7 @@ export class BridgeManager {
 
     switch (command) {
       case 'status':
-        const status = this.wakuBridge.getStatus();
+        const status = this.getStatus();
         await this.sendTextMessage(message.sender, `Status: ${JSON.stringify(status, null, 2)}`);
         break;
 
@@ -138,11 +138,23 @@ export class BridgeManager {
         break;
 
       case 'sync':
-        if (this.obsidianSync) {
-          await this.obsidianSync.syncWithAllAgents();
+        if (this.realTimeSync) {
+          await this.realTimeSync.syncWithAllAgents();
           await this.sendTextMessage(message.sender, 'Sync initiated');
         } else {
-          await this.sendTextMessage(message.sender, 'Obsidian sync not configured');
+          await this.sendTextMessage(message.sender, 'Real-time sync not configured');
+        }
+        break;
+
+      case 'sync-status':
+        if (this.realTimeSync) {
+          const syncStatus = await this.realTimeSync.getSyncStatus();
+          const statusText = syncStatus.map(s => 
+            `Agent: ${s.agentId}\nLast Sync: ${s.lastSync.toLocaleString()}\nNotes Synced: ${s.notesSynced}\nConflicts: ${s.conflicts}`
+          ).join('\n\n');
+          await this.sendTextMessage(message.sender, `Sync Status:\n${statusText}`);
+        } else {
+          await this.sendTextMessage(message.sender, 'Real-time sync not configured');
         }
         break;
 
@@ -151,6 +163,7 @@ export class BridgeManager {
 - status: Get bridge status
 - agents: List known agents
 - sync: Initiate manual sync
+- sync-status: Show sync status
 - help: Show this help`;
         await this.sendTextMessage(message.sender, helpText);
         break;
@@ -169,7 +182,7 @@ export class BridgeManager {
       encrypted: true,
     };
 
-    return await this.wakuBridge.sendMessage(message);
+    return await this.hivesync.sendMessage(message);
   }
 
   async sendCommand(recipient: string, command: string, args: any = {}): Promise<string> {
@@ -181,7 +194,7 @@ export class BridgeManager {
       encrypted: true,
     };
 
-    return await this.wakuBridge.sendMessage(message);
+    return await this.hivesync.sendMessage(message);
   }
 
   async broadcastMessage(text: string): Promise<string> {
@@ -193,7 +206,7 @@ export class BridgeManager {
       encrypted: false, // Broadcast messages are not encrypted
     };
 
-    return await this.wakuBridge.sendMessage(message);
+    return await this.hivesync.sendMessage(message);
   }
 
   async getUnreadMessages(): Promise<Message[]> {
@@ -205,22 +218,27 @@ export class BridgeManager {
   }
 
   getStatus(): any {
-    const wakuStatus = this.wakuBridge.getStatus();
+    const hivesyncStatus = this.hivesync.getStatus();
     return {
       running: this.isRunning,
       agentId: this.config.agentId,
       agentName: this.config.agentName,
-      waku: wakuStatus,
-      obsidianSync: !!this.obsidianSync,
+      hivesync: hivesyncStatus,
+      realTimeSync: !!this.realTimeSync,
+      fileWatching: this.realTimeSync?.isWatching() || false,
     };
   }
 
-  async scanObsidianVault(vaultPath: string): Promise<number> {
-    if (!this.obsidianSync) {
-      throw new Error('Obsidian sync not initialized');
+  async triggerSync(): Promise<void> {
+    if (this.realTimeSync) {
+      await this.realTimeSync.syncWithAllAgents();
     }
+  }
 
-    const notes = await this.obsidianSync.scanVault();
-    return notes.length;
+  async getSyncStatus(): Promise<any> {
+    if (this.realTimeSync) {
+      return await this.realTimeSync.getSyncStatus();
+    }
+    return [];
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "hivesync",
-  "version": "1.0.0",
-  "description": "Secure Waku-based communication between Kai and other agents with Obsidian sync",
+  "version": "1.1.0",
+  "description": "Secure Waku-based communication between Kai and other agents with real-time Obsidian sync",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -37,18 +37,20 @@
     "p2p",
     "openclaw",
     "agent",
-    "sync"
+    "sync",
+    "real-time",
+    "file-sync"
   ],
   "author": "Kai Assistant",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/hivesync.git"
+    "url": "https://github.com/clawbotl37/hivesync.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/hivesync/issues"
+    "url": "https://github.com/clawbotl37/hivesync/issues"
   },
-  "homepage": "https://github.com/yourusername/hivesync#readme",
+  "homepage": "https://github.com/clawbotl37/hivesync#readme",
   "dependencies": {
     "js-waku": "^0.28.0",
     "sqlite3": "^5.1.6",
@@ -66,7 +68,8 @@
     "yaml": "^2.3.0",
     "dotenv": "^16.0.0",
     "winston": "^3.10.0",
-    "node-cron": "^3.0.2"
+    "node-cron": "^3.0.2",
+    "chokidar": "^3.6.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -86,7 +89,8 @@
     "prettier": "^3.0.0",
     "typedoc": "^0.24.0",
     "@types/boxen": "^5.1.0",
-    "@types/node-cron": "^3.0.8"
+    "@types/node-cron": "^3.0.8",
+    "@types/chokidar": "^2.1.3"
   },
   "engines": {
     "node": ">=18.0.0",
