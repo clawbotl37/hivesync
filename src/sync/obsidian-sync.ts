@@ -1,5 +1,5 @@
 import { MessageType, ObsidianNote, SyncState } from '../types';
-import { HiveSync } from '../core/hivesync';
+import { HiveSync } from '../core/hivesync-bridge';
 import { StorageManager } from '../storage/storage-manager';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';

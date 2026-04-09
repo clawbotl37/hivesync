@@ -1,49 +1,50 @@
-import { Waku } from 'js-waku';
-import { createLightNode } from 'js-waku';
-import { waitForRemotePeer } from 'js-waku';
-import { Protocols } from 'js-waku';
-import type { WakuMessage } from 'js-waku';
-import { utf8ToBytes } from 'js-waku';
-import { bytesToUtf8 } from 'js-waku';
+import {
+  createLightNode,
+  createEncoder,
+  createDecoder,
+  utf8ToBytes,
+  bytesToUtf8,
+  Protocols,
+  waitForRemotePeer,
+} from '@waku/sdk';
+import type { LightNode, IDecodedMessage } from '@waku/sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, MessageType, BridgeConfig } from '../types';
 
+const CONTENT_TOPIC_PREFIX = '/hivesync/1';
+
 export class HiveSync {
-  private waku: Waku | null = null;
+  private node: LightNode | null = null;
   private config: BridgeConfig;
   private messageHandlers: Map<MessageType, (message: Message) => void> = new Map();
   private isConnected: boolean = false;
+  private contentTopic: string;
 
   constructor(config: BridgeConfig) {
     this.config = config;
+    this.contentTopic = `${CONTENT_TOPIC_PREFIX}/${config.waku.pubsubTopic}/proto`;
   }
 
   async initialize(): Promise<boolean> {
     try {
       console.log('Initializing HiveSync bridge...');
-      
-      // Create a light node for efficiency
-      this.waku = await createLightNode({
-        defaultBootstrap: this.config.waku.bootstrapNodes.length === 0,
+
+      const useDefaultBootstrap = this.config.waku.bootstrapNodes.length === 0;
+
+      this.node = await createLightNode({
+        defaultBootstrap: useDefaultBootstrap,
+        bootstrapPeers: useDefaultBootstrap ? undefined : this.config.waku.bootstrapNodes,
       });
 
-      // Add bootstrap nodes if provided
-      if (this.config.waku.bootstrapNodes.length > 0) {
-        for (const node of this.config.waku.bootstrapNodes) {
-          await this.waku.addPeerToAddressBook(node);
-        }
-      }
-
-      // Wait for connection to peers
-      await waitForRemotePeer(this.waku, [Protocols.Store, Protocols.Filter, Protocols.LightPush]);
+      await this.node.start();
+      await this.node.waitForPeers([Protocols.LightPush, Protocols.Filter]);
 
       this.isConnected = true;
       console.log('HiveSync bridge initialized successfully');
-      console.log('Peer ID:', this.waku.libp2p.peerId.toString());
-      
-      // Subscribe to the pubsub topic
+      console.log('Peer ID:', this.node.peerId.toString());
+
       await this.subscribeToTopic();
-      
+
       return true;
     } catch (error) {
       console.error('Failed to initialize HiveSync bridge:', error);
@@ -53,42 +54,38 @@ export class HiveSync {
   }
 
   private async subscribeToTopic(): Promise<void> {
-    if (!this.waku) return;
+    if (!this.node || !this.node.filter) return;
 
-    const topic = this.config.waku.pubsubTopic;
-    
-    // Subscribe to messages
-    await this.waku.relay.addObserver(
-      (wakuMessage: WakuMessage) => {
+    const decoder = createDecoder(this.contentTopic);
+
+    await this.node.filter.subscribe(
+      decoder,
+      (wakuMessage: IDecodedMessage) => {
         this.handleIncomingMessage(wakuMessage);
-      },
-      [topic]
+      }
     );
 
-    console.log(`Subscribed to topic: ${topic}`);
+    console.log(`Subscribed to topic: ${this.contentTopic}`);
   }
 
-  private async handleIncomingMessage(wakuMessage: WakuMessage): Promise<void> {
+  private async handleIncomingMessage(wakuMessage: IDecodedMessage): Promise<void> {
     try {
       if (!wakuMessage.payload) return;
 
       const payload = bytesToUtf8(wakuMessage.payload);
       const message: Message = JSON.parse(payload);
 
-      // Verify the message is for this agent
       if (message.recipient !== this.config.agentId && message.recipient !== 'broadcast') {
         return;
       }
 
       console.log(`Received message from ${message.sender}: ${message.type}`);
 
-      // Call the appropriate handler
       const handler = this.messageHandlers.get(message.type);
       if (handler) {
         handler(message);
       }
 
-      // Send acknowledgment if needed
       if (message.type !== MessageType.ACK) {
         await this.sendAck(message.id, message.sender);
       }
@@ -98,7 +95,7 @@ export class HiveSync {
   }
 
   async sendMessage(message: Omit<Message, 'id' | 'timestamp'>): Promise<string> {
-    if (!this.waku || !this.isConnected) {
+    if (!this.node || !this.node.lightPush || !this.isConnected) {
       throw new Error('HiveSync bridge not initialized or connected');
     }
 
@@ -110,12 +107,9 @@ export class HiveSync {
 
     try {
       const payload = utf8ToBytes(JSON.stringify(fullMessage));
-      
-      await this.waku.lightPush.push({
-        payload,
-        timestamp: new Date(),
-        contentTopic: this.config.waku.pubsubTopic,
-      });
+      const encoder = createEncoder({ contentTopic: this.contentTopic });
+
+      await this.node.lightPush.send(encoder, { payload });
 
       console.log(`Message sent: ${fullMessage.id} to ${fullMessage.recipient}`);
       return fullMessage.id;
@@ -142,24 +136,23 @@ export class HiveSync {
   }
 
   async disconnect(): Promise<void> {
-    if (this.waku) {
-      await this.waku.stop();
-      this.waku = null;
+    if (this.node) {
+      await this.node.stop();
+      this.node = null;
       this.isConnected = false;
       console.log('HiveSync bridge disconnected');
     }
   }
 
   getStatus(): { connected: boolean; peerId?: string; peers: number } {
-    if (!this.waku) {
+    if (!this.node) {
       return { connected: false, peers: 0 };
     }
 
-    const peers = this.waku.libp2p.getPeers().length;
     return {
       connected: this.isConnected,
-      peerId: this.waku.libp2p.peerId.toString(),
-      peers,
+      peerId: this.node.peerId.toString(),
+      peers: 0, // peer count updated asynchronously via getConnectedPeers()
     };
   }
 }

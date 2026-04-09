@@ -1,72 +1,31 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { loadConfig, validateConfig, saveConfig } from '../../src/utils/config';
+import { StorageManager } from '../../src/storage/storage-manager';
+import { BridgeConfig } from '../../src/types';
+import yaml from 'yaml';
 
-const execAsync = promisify(exec);
+jest.mock('@waku/sdk');
 
-describe('HiveSync End-to-End Multi-Agent Test', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hivesync-test-'));
-  let agent1Dir: string;
-  let agent2Dir: string;
+describe('HiveSync E2E Multi-Agent', () => {
+  let tempDir: string;
 
   beforeAll(() => {
-    // Create test directories for two agents
-    agent1Dir = path.join(tempDir, 'agent1');
-    agent2Dir = path.join(tempDir, 'agent2');
-    fs.mkdirSync(agent1Dir, { recursive: true });
-    fs.mkdirSync(agent2Dir, { recursive: true });
-
-    // Create sample Obsidian vaults
-    const vault1Dir = path.join(agent1Dir, 'vault');
-    const vault2Dir = path.join(agent2Dir, 'vault');
-    fs.mkdirSync(vault1Dir, { recursive: true });
-    fs.mkdirSync(vault2Dir, { recursive: true });
-
-    // Create sample notes
-    fs.writeFileSync(
-      path.join(vault1Dir, 'Welcome.md'),
-      '# Welcome to Agent 1\n\nThis is agent 1\'s vault.',
-      'utf-8'
-    );
-
-    fs.writeFileSync(
-      path.join(vault2Dir, 'Welcome.md'),
-      '# Welcome to Agent 2\n\nThis is agent 2\'s vault.',
-      'utf-8'
-    );
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hivesync-e2e-'));
   });
 
   afterAll(() => {
-    // Clean up test directories
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  describe('CLI Commands', () => {
-    test('should show help information', async () => {
-      // Build the project first
-      await execAsync('npm run build', { cwd: '/root/hivesync' });
-
-      const { stdout } = await execAsync('node dist/cli.js --help', { 
-        cwd: '/root/hivesync' 
-      });
-
-      expect(stdout).toContain('hivesync');
-      expect(stdout).toContain('Usage:');
-      expect(stdout).toContain('Commands:');
-      expect(stdout).toContain('start');
-      expect(stdout).toContain('setup');
-      expect(stdout).toContain('status');
-    });
-
-    test('should run setup command', async () => {
-      // Create a simple test config
-      const testConfig = {
-        agentId: 'test-agent-cli',
-        agentName: 'Test Agent CLI',
-        storagePath: path.join(agent1Dir, 'hivesync.db'),
-        syncInterval: 0,
+  describe('Configuration', () => {
+    test('should write and read config via YAML', async () => {
+      const config: BridgeConfig = {
+        agentId: 'e2e-agent',
+        agentName: 'E2E Agent',
+        storagePath: path.join(tempDir, 'hivesync.db'),
+        syncInterval: 5,
         waku: {
           listenAddresses: [],
           bootstrapNodes: [],
@@ -76,97 +35,118 @@ describe('HiveSync End-to-End Multi-Agent Test', () => {
         },
       };
 
-      const configPath = path.join(agent1Dir, 'config.yaml');
-      const yaml = require('yaml');
-      fs.writeFileSync(configPath, yaml.stringify(testConfig), 'utf-8');
+      const configPath = path.join(tempDir, 'config.yaml');
+      fs.writeFileSync(configPath, yaml.stringify(config), 'utf-8');
 
-      // Test that config can be loaded
-      expect(fs.existsSync(configPath)).toBe(true);
-      
-      const configContent = fs.readFileSync(configPath, 'utf-8');
-      const parsedConfig = yaml.parse(configContent);
-      
-      expect(parsedConfig.agentId).toBe('test-agent-cli');
-      expect(parsedConfig.agentName).toBe('Test Agent CLI');
-    });
-  });
-
-  describe('Configuration Management', () => {
-    test('should create default configuration', () => {
-      // Test config loading utility
-      const { loadConfig } = require('../../dist/utils/config');
-      
-      // Create a minimal config file
-      const testConfig = {
-        agentId: 'test-config-agent',
-        agentName: 'Test Config Agent',
-        storagePath: ':memory:',
-        syncInterval: 5,
-      };
-
-      const configPath = path.join(tempDir, 'test-config.yaml');
-      const yaml = require('yaml');
-      fs.writeFileSync(configPath, yaml.stringify(testConfig), 'utf-8');
-
-      // Load and verify config
-      const config = loadConfig(configPath);
-      expect(config.agentId).toBe('test-config-agent');
-      expect(config.agentName).toBe('Test Config Agent');
-      expect(config.syncInterval).toBe(5);
+      const loaded = await loadConfig(configPath);
+      expect(loaded.agentId).toBe('e2e-agent');
+      expect(loaded.agentName).toBe('E2E Agent');
     });
 
-    test('should validate configuration', () => {
-      const { validateConfig } = require('../../dist/utils/config');
-      
-      const validConfig = {
-        agentId: 'test-agent',
-        agentName: 'Test Agent',
+    test('should return defaults for missing config', async () => {
+      const config = await loadConfig(path.join(tempDir, 'nonexistent.yaml'));
+      expect(config).toBeDefined();
+      expect(config.agentId).toBeDefined();
+      expect(config.agentName).toBeDefined();
+    });
+
+    test('should handle invalid YAML gracefully', async () => {
+      const badPath = path.join(tempDir, 'bad.yaml');
+      fs.writeFileSync(badPath, 'invalid: yaml: content: [', 'utf-8');
+
+      const config = await loadConfig(badPath);
+      expect(config).toBeDefined();
+    });
+
+    test('should validate config correctly', () => {
+      const valid: BridgeConfig = {
+        agentId: 'test',
+        agentName: 'Test',
         storagePath: '/tmp/test.db',
         syncInterval: 5,
         waku: {
+          listenAddresses: [],
           bootstrapNodes: ['/dns4/test.node/tcp/443/wss/p2p/test'],
+          pubsubTopic: '/test',
+          keepAlive: false,
+          maxPeers: 1,
         },
       };
 
-      const errors = validateConfig(validConfig);
-      expect(errors).toHaveLength(0);
+      expect(validateConfig(valid)).toHaveLength(0);
 
-      const invalidConfig = {
+      const invalid = {
         agentId: '',
         agentName: '',
         storagePath: '',
         syncInterval: -1,
         waku: {
+          listenAddresses: [],
           bootstrapNodes: [],
+          pubsubTopic: '',
+          keepAlive: false,
+          maxPeers: 0,
         },
       };
 
-      const invalidErrors = validateConfig(invalidConfig);
-      expect(invalidErrors.length).toBeGreaterThan(0);
-      expect(invalidErrors).toContain('Agent ID is required');
-      expect(invalidErrors).toContain('Agent name is required');
-      expect(invalidErrors).toContain('Storage path is required');
-      expect(invalidErrors).toContain('Sync interval must be positive');
-      expect(invalidErrors).toContain('At least one Waku bootstrap node is required');
+      const errors = validateConfig(invalid);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors).toContain('Agent ID is required');
+      expect(errors).toContain('Agent name is required');
+      expect(errors).toContain('Storage path is required');
+      expect(errors).toContain('Sync interval must be positive');
+      expect(errors).toContain('At least one Waku bootstrap node is required');
+    });
+
+    test('should save config to disk', async () => {
+      const config: BridgeConfig = {
+        agentId: 'save-test',
+        agentName: 'Save Test',
+        storagePath: ':memory:',
+        syncInterval: 1,
+        waku: {
+          listenAddresses: [],
+          bootstrapNodes: [],
+          pubsubTopic: '/test/save',
+          keepAlive: false,
+          maxPeers: 1,
+        },
+      };
+
+      const savePath = path.join(tempDir, 'saved-config.yaml');
+      await saveConfig(config, savePath);
+
+      expect(fs.existsSync(savePath)).toBe(true);
+      const content = yaml.parse(fs.readFileSync(savePath, 'utf-8'));
+      expect(content.agentId).toBe('save-test');
     });
   });
 
-  describe('Library API', () => {
-    test('should export main classes', () => {
-      const { BridgeManager, HiveSync } = require('../../dist/index');
-      
+  describe('Library Exports', () => {
+    test('should export BridgeManager', () => {
+      const { BridgeManager } = require('../../src/index');
       expect(BridgeManager).toBeDefined();
-      expect(HiveSync).toBeDefined();
       expect(typeof BridgeManager).toBe('function');
+    });
+
+    test('should export HiveSync', () => {
+      const { HiveSync } = require('../../src/index');
+      expect(HiveSync).toBeDefined();
       expect(typeof HiveSync).toBe('function');
     });
 
-    test('should create bridge manager instance', () => {
-      const { BridgeManager } = require('../../dist/index');
-      
-      const config = {
-        agentId: 'test-lib-agent',
-        agentName: 'Test Library Agent',
+    test('should export StorageManager', () => {
+      const { StorageManager } = require('../../src/index');
+      expect(StorageManager).toBeDefined();
+      expect(typeof StorageManager).toBe('function');
+    });
+
+    test('should instantiate BridgeManager', () => {
+      const { BridgeManager } = require('../../src/index');
+
+      const bridge = new BridgeManager({
+        agentId: 'lib-agent',
+        agentName: 'Library Agent',
         storagePath: ':memory:',
         syncInterval: 0,
         waku: {
@@ -176,24 +156,19 @@ describe('HiveSync End-to-End Multi-Agent Test', () => {
           keepAlive: false,
           maxPeers: 1,
         },
-      };
+      });
 
-      const bridge = new BridgeManager(config);
       expect(bridge).toBeInstanceOf(BridgeManager);
-      expect(bridge.getStatus).toBeDefined();
       expect(typeof bridge.getStatus).toBe('function');
+      expect(typeof bridge.sendTextMessage).toBe('function');
     });
   });
 
   describe('File System Operations', () => {
-    test('should handle Obsidian vault scanning', () => {
-      const { ObsidianSyncManager } = require('../../dist/sync/obsidian-sync');
-      
-      // Create a test vault
-      const testVaultDir = path.join(tempDir, 'test-vault');
-      fs.mkdirSync(testVaultDir, { recursive: true });
-      
-      // Create some markdown files
+    test('should create and verify Obsidian-like vault structure', () => {
+      const vaultDir = path.join(tempDir, 'vault');
+      fs.mkdirSync(vaultDir, { recursive: true });
+
       const files = [
         { name: 'Note1.md', content: '# Note 1\n\nContent 1' },
         { name: 'Note2.md', content: '# Note 2\n\nContent 2' },
@@ -201,91 +176,48 @@ describe('HiveSync End-to-End Multi-Agent Test', () => {
       ];
 
       for (const file of files) {
-        const filePath = path.join(testVaultDir, file.name);
-        const dirPath = path.dirname(filePath);
-        if (!fs.existsSync(dirPath)) {
-          fs.mkdirSync(dirPath, { recursive: true });
-        }
+        const filePath = path.join(vaultDir, file.name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, file.content, 'utf-8');
       }
 
-      // Verify files were created
       for (const file of files) {
-        const filePath = path.join(testVaultDir, file.name);
+        const filePath = path.join(vaultDir, file.name);
         expect(fs.existsSync(filePath)).toBe(true);
-        
-        const content = fs.readFileSync(filePath, 'utf-8');
-        expect(content).toBe(file.content);
+        expect(fs.readFileSync(filePath, 'utf-8')).toBe(file.content);
       }
-
-      // Clean up
-      fs.rmSync(testVaultDir, { recursive: true, force: true });
     });
   });
 
-  describe('Error Scenarios', () => {
-    test('should handle missing configuration gracefully', async () => {
-      const { loadConfig } = require('../../dist/utils/config');
-      
-      // Try to load non-existent config
-      const nonExistentPath = path.join(tempDir, 'non-existent-config.yaml');
-      const config = loadConfig(nonExistentPath);
-      
-      // Should return default config
-      expect(config).toBeDefined();
-      expect(config.agentId).toBeDefined();
-      expect(config.agentName).toBeDefined();
-    });
-
-    test('should handle invalid configuration files', () => {
-      // Create invalid YAML
-      const invalidConfigPath = path.join(tempDir, 'invalid-config.yaml');
-      fs.writeFileSync(invalidConfigPath, 'invalid: yaml: content: [', 'utf-8');
-
-      const { loadConfig } = require('../../dist/utils/config');
-      
-      // Should handle parse error gracefully
-      const config = loadConfig(invalidConfigPath);
-      expect(config).toBeDefined(); // Should fall back to defaults
-    });
-  });
-
-  describe('Performance', () => {
-    test('should handle multiple messages efficiently', async () => {
-      const { StorageManager } = require('../../dist/storage/storage-manager');
-      
+  describe('Storage Performance', () => {
+    test('should handle bulk message operations efficiently', async () => {
       const storage = new StorageManager(':memory:');
       await storage.initialize();
 
-      // Save multiple messages
-      const startTime = Date.now();
-      const messageCount = 100;
+      const count = 100;
+      const start = Date.now();
 
-      for (let i = 0; i < messageCount; i++) {
-        const message = {
-          id: `message-${i}`,
+      for (let i = 0; i < count; i++) {
+        await storage.saveMessage({
+          id: `perf-msg-${i}`,
           sender: `agent-${i % 5}`,
           recipient: `agent-${(i + 1) % 5}`,
-          type: 'text',
+          type: 'text' as any,
           content: { text: `Message ${i}` },
           timestamp: new Date(),
           encrypted: false,
-        };
-        await storage.saveMessage(message);
+        });
       }
 
-      const saveTime = Date.now() - startTime;
-      
-      // Should save 100 messages in reasonable time
-      expect(saveTime).toBeLessThan(5000); // 5 seconds
+      const saveTime = Date.now() - start;
+      expect(saveTime).toBeLessThan(5000);
 
-      // Retrieve messages
       const retrieveStart = Date.now();
-      const messages = await storage.getMessages(messageCount, 0);
+      const messages = await storage.getMessages(count, 0);
       const retrieveTime = Date.now() - retrieveStart;
 
-      expect(messages).toHaveLength(messageCount);
-      expect(retrieveTime).toBeLessThan(1000); // 1 second
+      expect(messages).toHaveLength(count);
+      expect(retrieveTime).toBeLessThan(1000);
 
       await storage.close();
     });

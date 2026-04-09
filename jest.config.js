@@ -7,11 +7,14 @@ module.exports = {
     'src/**/*.ts',
     '!src/**/*.d.ts',
     '!src/cli.ts',
-    '!src/setup.ts'
+    '!src/setup-wizard.ts',
   ],
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov', 'html'],
+  coverageReporters: ['text', 'lcov'],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1'
-  }
+    '^@waku/sdk$': '<rootDir>/__mocks__/@waku/sdk.js',
+  },
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { diagnostics: false }],
+  },
 };

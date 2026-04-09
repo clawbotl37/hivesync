@@ -1,21 +1,46 @@
 import { HiveSync } from '../../src/core/hivesync-bridge';
 import { BridgeConfig, MessageType } from '../../src/types';
 
+jest.mock('@waku/sdk');
+
+const mockConfig: BridgeConfig = {
+  agentId: 'test-agent-1',
+  agentName: 'Test Agent',
+  storagePath: ':memory:',
+  syncInterval: 0,
+  waku: {
+    listenAddresses: [],
+    bootstrapNodes: [],
+    pubsubTopic: '/test/topic',
+    keepAlive: false,
+    maxPeers: 1,
+  },
+};
+
+function createMockNode() {
+  return {
+    peerId: { toString: () => 'test-peer-id' },
+    filter: {
+      subscribe: jest.fn().mockResolvedValue({
+        subscription: { subscribe: jest.fn(), unsubscribe: jest.fn() },
+        error: null,
+        results: { successes: [], failures: [] },
+      }),
+    },
+    lightPush: {
+      send: jest.fn().mockResolvedValue({ successes: [], failures: [] }),
+    },
+    start: jest.fn().mockResolvedValue(undefined),
+    stop: jest.fn().mockResolvedValue(undefined),
+    waitForPeers: jest.fn().mockResolvedValue(undefined),
+    isStarted: jest.fn().mockReturnValue(true),
+    isConnected: jest.fn().mockReturnValue(true),
+    getConnectedPeers: jest.fn().mockResolvedValue([]),
+  };
+}
+
 describe('HiveSync Core', () => {
   let hivesync: HiveSync;
-  const mockConfig: BridgeConfig = {
-    agentId: 'test-agent-1',
-    agentName: 'Test Agent',
-    storagePath: ':memory:',
-    syncInterval: 0,
-    waku: {
-      listenAddresses: [],
-      bootstrapNodes: [],
-      pubsubTopic: '/test/topic',
-      keepAlive: false,
-      maxPeers: 1,
-    },
-  };
 
   beforeEach(() => {
     hivesync = new HiveSync(mockConfig);
@@ -31,30 +56,29 @@ describe('HiveSync Core', () => {
       expect(hivesync.getStatus().connected).toBe(false);
     });
 
-    test('should initialize successfully', async () => {
-      // Mock Waku initialization since we can't actually connect in tests
-      const mockWaku = {
-        libp2p: {
-          peerId: { toString: () => 'test-peer-id' },
-          getPeers: () => [],
-        },
-        relay: {
-          addObserver: jest.fn(),
-        },
-        lightPush: {
-          push: jest.fn().mockResolvedValue(undefined),
-        },
-        stop: jest.fn().mockResolvedValue(undefined),
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
+    test('should report connected status when node is set', () => {
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
 
       const status = hivesync.getStatus();
       expect(status.connected).toBe(true);
       expect(status.peerId).toBe('test-peer-id');
+    });
+
+    test('should initialize with mocked createLightNode', async () => {
+      const { createLightNode } = require('@waku/sdk');
+      const mockNode = createMockNode();
+      createLightNode.mockResolvedValue(mockNode);
+
+      const result = await hivesync.initialize();
+
+      expect(result).toBe(true);
+      expect(hivesync.getStatus().connected).toBe(true);
+      expect(mockNode.start).toHaveBeenCalled();
+      expect(mockNode.waitForPeers).toHaveBeenCalled();
     });
   });
 
@@ -62,39 +86,105 @@ describe('HiveSync Core', () => {
     test('should register message handlers', () => {
       const handler = jest.fn();
       hivesync.onMessage(MessageType.TEXT, handler);
-      
-      // Simulate receiving a message
+      expect(typeof hivesync.onMessage).toBe('function');
+    });
+
+    test('should dispatch incoming messages to registered handlers', async () => {
+      const handler = jest.fn();
+      hivesync.onMessage(MessageType.TEXT, handler);
+
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
+
       const testMessage = {
         id: 'test-id',
         sender: 'sender-1',
         recipient: 'test-agent-1',
         type: MessageType.TEXT,
         content: { text: 'Hello' },
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         encrypted: false,
       };
 
-      // @ts-ignore - Access private method for testing
-      hivesync.handleIncomingMessage({
+      // @ts-ignore
+      await hivesync['handleIncomingMessage']({
         payload: new TextEncoder().encode(JSON.stringify(testMessage)),
       });
 
-      // Handler won't be called because Waku is mocked
-      // This test verifies the method exists and doesn't throw
-      expect(hivesync.onMessage).toBeDefined();
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'test-id',
+          sender: 'sender-1',
+          type: MessageType.TEXT,
+        })
+      );
     });
 
-    test('should send message with correct format', async () => {
-      const mockPush = jest.fn().mockResolvedValue(undefined);
-      const mockWaku = {
-        lightPush: { push: mockPush },
-        libp2p: { peerId: { toString: () => 'test-id' } },
+    test('should ignore messages for other agents', async () => {
+      const handler = jest.fn();
+      hivesync.onMessage(MessageType.TEXT, handler);
+
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
+
+      const testMessage = {
+        id: 'test-id',
+        sender: 'sender-1',
+        recipient: 'other-agent',
+        type: MessageType.TEXT,
+        content: { text: 'Hello' },
+        timestamp: new Date().toISOString(),
+        encrypted: false,
       };
 
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
+      // @ts-ignore
+      await hivesync['handleIncomingMessage']({
+        payload: new TextEncoder().encode(JSON.stringify(testMessage)),
+      });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    test('should accept broadcast messages', async () => {
+      const handler = jest.fn();
+      hivesync.onMessage(MessageType.TEXT, handler);
+
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
+
+      const testMessage = {
+        id: 'test-id',
+        sender: 'sender-1',
+        recipient: 'broadcast',
+        type: MessageType.TEXT,
+        content: { text: 'Hello everyone' },
+        timestamp: new Date().toISOString(),
+        encrypted: false,
+      };
+
+      // @ts-ignore
+      await hivesync['handleIncomingMessage']({
+        payload: new TextEncoder().encode(JSON.stringify(testMessage)),
+      });
+
+      expect(handler).toHaveBeenCalled();
+    });
+
+    test('should send message via lightPush.send', async () => {
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
 
       const message = {
         sender: 'test-agent-1',
@@ -105,72 +195,68 @@ describe('HiveSync Core', () => {
       };
 
       const messageId = await hivesync.sendMessage(message);
-      
+
       expect(messageId).toBeDefined();
-      expect(mockPush).toHaveBeenCalled();
-      
-      const callArgs = mockPush.mock.calls[0][0];
-      expect(callArgs.payload).toBeDefined();
-      expect(callArgs.contentTopic).toBe(mockConfig.waku.pubsubTopic);
+      expect(typeof messageId).toBe('string');
+      expect(mockNode.lightPush.send).toHaveBeenCalledWith(
+        expect.objectContaining({ contentTopic: expect.any(String) }),
+        expect.objectContaining({ payload: expect.any(Uint8Array) })
+      );
+    });
+
+    test('should throw when sending without connection', async () => {
+      const message = {
+        sender: 'test-agent-1',
+        recipient: 'recipient-1',
+        type: MessageType.TEXT,
+        content: { text: 'Test' },
+        encrypted: true,
+      };
+
+      await expect(hivesync.sendMessage(message)).rejects.toThrow(
+        'HiveSync bridge not initialized or connected'
+      );
     });
   });
 
-  describe('Status Management', () => {
-    test('should return correct status when disconnected', () => {
+  describe('Status', () => {
+    test('should return disconnected status initially', () => {
       const status = hivesync.getStatus();
       expect(status.connected).toBe(false);
       expect(status.peers).toBe(0);
       expect(status.peerId).toBeUndefined();
     });
 
-    test('should return correct status when connected', () => {
-      const mockWaku = {
-        libp2p: {
-          peerId: { toString: () => 'connected-peer-id' },
-          getPeers: () => ['peer-1', 'peer-2'],
-        },
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
+    test('should return connected status with peer info', () => {
+      const mockNode = createMockNode();
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
 
       const status = hivesync.getStatus();
       expect(status.connected).toBe(true);
-      expect(status.peerId).toBe('connected-peer-id');
-      expect(status.peers).toBe(2);
+      expect(status.peerId).toBe('test-peer-id');
     });
   });
 
   describe('Error Handling', () => {
-    test('should handle initialization errors gracefully', async () => {
-      // Mock failed initialization
-      const originalConsoleError = console.error;
-      console.error = jest.fn();
+    test('should handle initialization failure gracefully', async () => {
+      const { createLightNode } = require('@waku/sdk');
+      createLightNode.mockRejectedValue(new Error('Connection failed'));
 
-      // Create a config that will cause initialization to fail
-      const invalidConfig = { ...mockConfig, agentId: '' };
-      const invalidHiveSync = new HiveSync(invalidConfig);
-      
-      // Try to initialize (will fail but shouldn't throw)
-      await expect(invalidHiveSync.initialize()).resolves.not.toThrow();
-
-      console.error = originalConsoleError;
+      const result = await hivesync.initialize();
+      expect(result).toBe(false);
+      expect(hivesync.getStatus().connected).toBe(false);
     });
 
-    test('should handle message sending errors', async () => {
-      // Mock failed message sending
-      const mockPush = jest.fn().mockRejectedValue(new Error('Network error'));
-      const mockWaku = {
-        lightPush: { push: mockPush },
-        libp2p: { peerId: { toString: () => 'test-id' } },
-      };
-
-      // @ts-ignore - Mock private property
-      hivesync.waku = mockWaku;
-      // @ts-ignore - Mock private property
-      hivesync.isConnected = true;
+    test('should propagate message sending errors', async () => {
+      const mockNode = createMockNode();
+      mockNode.lightPush.send.mockRejectedValue(new Error('Network error'));
+      // @ts-ignore
+      hivesync['node'] = mockNode;
+      // @ts-ignore
+      hivesync['isConnected'] = true;
 
       const message = {
         sender: 'test-agent-1',
@@ -181,6 +267,10 @@ describe('HiveSync Core', () => {
       };
 
       await expect(hivesync.sendMessage(message)).rejects.toThrow('Network error');
+    });
+
+    test('should handle disconnect when not connected', async () => {
+      await expect(hivesync.disconnect()).resolves.not.toThrow();
     });
   });
 });

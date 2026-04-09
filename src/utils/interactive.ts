@@ -24,11 +24,12 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
         const status = bridge.getStatus();
         console.log(chalk.cyan('\n=== Bridge Status ===\n'));
         console.log(chalk.white(`Agent: ${status.agentName} (${status.agentId})`));
-        console.log(chalk.white(`Running: ${status.running ? '✅' : '❌'}`));
-        console.log(chalk.white(`Waku Connected: ${status.waku.connected ? '✅' : '❌'}`));
-        console.log(chalk.white(`Peer ID: ${status.waku.peerId || 'N/A'}`));
-        console.log(chalk.white(`Active peers: ${status.waku.peers}`));
-        console.log(chalk.white(`Obsidian Sync: ${status.obsidianSync ? '✅' : '❌'}`));
+        console.log(chalk.white(`Running: ${status.running ? 'yes' : 'no'}`));
+        console.log(chalk.white(`Waku Connected: ${status.hivesync.connected ? 'yes' : 'no'}`));
+        console.log(chalk.white(`Peer ID: ${status.hivesync.peerId || 'N/A'}`));
+        console.log(chalk.white(`Active peers: ${status.hivesync.peers}`));
+        console.log(chalk.white(`Real-time Sync: ${status.realTimeSync ? 'yes' : 'no'}`));
+        console.log(chalk.white(`File Watching: ${status.fileWatching ? 'yes' : 'no'}`));
         break;
 
       case 'send':
@@ -42,7 +43,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
           const msgId = await bridge.sendTextMessage(recipient, message);
           console.log(chalk.green(`✓ Message sent! ID: ${msgId}`));
         } catch (error) {
-          console.log(chalk.red(`✗ Failed to send message: ${error.message}`));
+          console.log(chalk.red(`✗ Failed to send message: ${(error as Error).message}`));
         }
         break;
 
@@ -56,7 +57,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
           const msgId = await bridge.broadcastMessage(broadcastMsg);
           console.log(chalk.green(`✓ Broadcast sent! ID: ${msgId}`));
         } catch (error) {
-          console.log(chalk.red(`✗ Failed to broadcast: ${error.message}`));
+          console.log(chalk.red(`✗ Failed to broadcast: ${(error as Error).message}`));
         }
         break;
 
@@ -78,7 +79,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
             });
           }
         } catch (error) {
-          console.log(chalk.red(`✗ Failed to get messages: ${error.message}`));
+          console.log(chalk.red(`✗ Failed to get messages: ${(error as Error).message}`));
         }
         break;
 
@@ -87,7 +88,7 @@ export async function setupInteractiveMode(bridge: BridgeManager): Promise<void>
           await bridge.sendCommand('broadcast', 'sync');
           console.log(chalk.green('✓ Sync command sent to all agents'));
         } catch (error) {
-          console.log(chalk.red(`✗ Failed to sync: ${error.message}`));
+          console.log(chalk.red(`✗ Failed to sync: ${(error as Error).message}`));
         }
         break;
 

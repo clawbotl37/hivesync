@@ -258,7 +258,7 @@ program
       
       await bridge.stop();
     } catch (error) {
-      console.log(chalk.red(`   ❌ Error: ${error.message}`));
+      console.log(chalk.red(`   Error: ${(error as Error).message}`));
     }
     
     console.log(chalk.white('\n2. Testing local storage...'));
@@ -270,7 +270,7 @@ program
       db.close();
       console.log(chalk.green('   ✅ Local storage working'));
     } catch (error) {
-      console.log(chalk.red(`   ❌ Error: ${error.message}`));
+      console.log(chalk.red(`   Error: ${(error as Error).message}`));
     }
     
     console.log(chalk.white('\n3. Testing file system monitoring...'));
@@ -282,7 +282,7 @@ program
       fs.unlinkSync(tempFile);
       console.log(chalk.green('   ✅ File system access working'));
     } catch (error) {
-      console.log(chalk.red(`   ❌ Error: ${error.message}`));
+      console.log(chalk.red(`   Error: ${(error as Error).message}`));
     }
     
     console.log(chalk.white('\n4. Testing encryption...'));
@@ -293,7 +293,7 @@ program
       });
       console.log(chalk.green('   ✅ Encryption working'));
     } catch (error) {
-      console.log(chalk.red(`   ❌ Error: ${error.message}`));
+      console.log(chalk.red(`   Error: ${(error as Error).message}`));
     }
     
     console.log(chalk.cyan('\n=== Test Complete ===\n'));

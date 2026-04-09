@@ -116,7 +116,7 @@ export class StorageManager {
       [limit, offset]
     );
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       sender: row.sender,
       recipient: row.recipient,
@@ -133,7 +133,7 @@ export class StorageManager {
       `SELECT * FROM messages WHERE read = 0 ORDER BY timestamp ASC`
     );
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       sender: row.sender,
       recipient: row.recipient,
@@ -187,7 +187,7 @@ export class StorageManager {
   async getAllAgents(): Promise<AgentIdentity[]> {
     const rows = await this.db.all(`SELECT * FROM agents ORDER BY last_seen DESC`);
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       name: row.name,
       publicKey: row.public_key,
@@ -241,7 +241,7 @@ export class StorageManager {
       [since.toISOString()]
     );
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       path: row.path,
       content: row.content,
@@ -295,7 +295,12 @@ export class StorageManager {
 
   async close(): Promise<void> {
     if (this.db) {
-      await this.db.close();
+      try {
+        await this.db.close();
+      } catch (_) {
+        // already closed
+      }
+      this.db = null;
     }
   }
 }

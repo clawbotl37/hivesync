@@ -41,7 +41,7 @@ export class BridgeManager {
       if (this.config.syncInterval > 0) {
         // For real-time sync, we need a vault path
         // This would typically come from config.obsidian.vaultPath
-        const vaultPath = this.config['obsidian']?.['vaultPath'] || '/tmp/obsidian-vault';
+        const vaultPath = (this.config as any).obsidian?.vaultPath || '/tmp/obsidian-vault';
         this.realTimeSync = new RealTimeSyncManager(this.hivesync, this.storage, vaultPath);
         await this.realTimeSync.start();
       }
