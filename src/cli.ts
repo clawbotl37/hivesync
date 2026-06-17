@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import sqlite3 from 'sqlite3';
 import { BridgeManager } from './core/bridge-manager';
 import { setupInteractiveMode } from './utils/interactive';
+import { startTui } from './utils/tui';
 import { loadConfig } from './utils/config';
 import { logger } from './utils/logger';
 import { runSetupWizard } from './setup-wizard';
@@ -49,6 +50,7 @@ program
   .option('-c, --config <path>', 'Configuration file path', './config/hivesync.yaml')
   .option('-d, --daemon', 'Run as daemon in background')
   .option('-v, --verbose', 'Enable verbose logging')
+  .option('-p, --plain', 'Use the plain line-based REPL instead of the messaging UI')
   .option('--no-sync', 'Disable real-time Obsidian sync')
   .action(async (options) => {
     try {
@@ -79,8 +81,12 @@ program
           await bridge.stop();
           process.exit(0);
         });
-      } else {
+      } else if (options.plain || !process.stdout.isTTY) {
+        // Scriptable line-based REPL (also used by non-TTY / piped sessions).
         await setupInteractiveMode(bridge);
+      } else {
+        // Interactive messaging UI: contacts → chat → commands.
+        await startTui(bridge);
       }
     } catch (error) {
       logger.error('Failed to start bridge:', error);

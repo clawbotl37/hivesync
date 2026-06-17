@@ -81,19 +81,42 @@ describe('BridgeManager communication (in-memory transport)', () => {
     expect(text.encrypted).toBe(true); // beta's key was known => encrypted
   });
 
-  test('auto-replies pong to a ping (round trip)', async () => {
+  test('supports a bidirectional exchange (reply)', async () => {
     await alpha.start();
     await beta.start();
     expect(await alpha.waitForAgent('agent-beta', 2000)).toBe(true);
     expect(await beta.waitForAgent('agent-alpha', 2000)).toBe(true);
 
-    await alpha.sendTextMessage('agent-beta', 'ping');
-
-    const gotPong = await waitFor(async () => {
-      const msgs = await alpha.getUnreadMessages();
-      return msgs.some((m) => m.content.text === 'pong');
+    // beta replies as soon as it hears from alpha
+    beta.on('text', async (m) => {
+      if (m.sender === 'agent-alpha') await beta.sendTextMessage('agent-alpha', 'got it');
     });
-    expect(gotPong).toBe(true);
+
+    await alpha.sendTextMessage('agent-beta', 'hello?');
+
+    const gotReply = await waitFor(async () => {
+      const msgs = await alpha.getUnreadMessages();
+      return msgs.some((m) => m.content.text === 'got it');
+    });
+    expect(gotReply).toBe(true);
+  });
+
+  test('records both sides of a conversation in history', async () => {
+    await alpha.start();
+    await beta.start();
+    expect(await alpha.waitForAgent('agent-beta', 2000)).toBe(true);
+
+    await alpha.sendTextMessage('agent-beta', 'first');
+    await waitFor(async () => (await beta.getUnreadMessages()).some((m) => m.content.text === 'first'));
+    await beta.sendTextMessage('agent-alpha', 'second');
+    await waitFor(async () => (await alpha.getUnreadMessages()).some((m) => m.content.text === 'second'));
+
+    const convo = await alpha.getConversation('agent-beta');
+    const texts = convo.map((m) => m.content.text);
+    expect(texts).toEqual(expect.arrayContaining(['first', 'second']));
+    // outgoing 'first' is attributed to us, incoming 'second' to the peer
+    expect(convo.find((m) => m.content.text === 'first')!.sender).toBe('agent-alpha');
+    expect(convo.find((m) => m.content.text === 'second')!.sender).toBe('agent-beta');
   });
 
   test('broadcast reaches the other agent but not the sender', async () => {
@@ -110,8 +133,11 @@ describe('BridgeManager communication (in-memory transport)', () => {
       })
     ).toBe(true);
 
-    const alphaMsgs = await alpha.getUnreadMessages();
-    expect(alphaMsgs.some((m) => m.content.text === 'hello everyone')).toBe(false);
+    // Alice keeps her own outgoing copy, but self-filtering means no network
+    // echo — so there's exactly one copy and it's attributed to her.
+    const alphaCopies = (await alpha.getBroadcasts()).filter((m) => m.content.text === 'hello everyone');
+    expect(alphaCopies).toHaveLength(1);
+    expect(alphaCopies[0].sender).toBe('agent-alpha');
   });
 
   test('command messages trigger handled responses', async () => {

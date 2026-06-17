@@ -38,6 +38,13 @@ encryption.
 - Anti-loop guard for Obsidian sync (don't re-broadcast notes we just wrote).
 - A real end-to-end test that spawns two agent **processes** that discover each
   other and exchange an encrypted message over the live Waku network.
+- **Messaging UI**: `hivesync start` opens a terminal app — a contacts list of
+  auto-discovered agents (+ a Broadcast room), press Enter to open a chat with
+  full history and live messages, Esc to go back, `?` for commands. `--plain`
+  keeps the line-based REPL for scripts/agents.
+- **Event-driven `BridgeManager`** (`EventEmitter`): `text`, `message`, and
+  `agentDiscovered` events, plus `getConversation`/`getBroadcasts` and persisted
+  outgoing messages — so agents react without polling.
 
 ### Changed
 - `BridgeConfig.waku` now uses `clusterId`, `numShardsInCluster`, and

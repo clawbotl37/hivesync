@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { EventEmitter } from 'events';
 import { HiveSync } from './hivesync-bridge';
 import { Identity } from './identity';
 import { Transport } from './transport';
@@ -8,7 +9,15 @@ import { RealTimeSyncManager } from '../sync/real-time-sync';
 import { BridgeConfig, AgentIdentity, Message, MessageType } from '../types';
 import { logger } from '../utils/logger';
 
-export class BridgeManager {
+/**
+ * Orchestrates identity, transport, storage and (optional) sync. Emits events so
+ * both humans (the TUI) and agents (programmatic consumers) can react live
+ * instead of polling:
+ *  - `text`            (message: Message)        an incoming text message
+ *  - `message`         (message: Message)        any incoming message
+ *  - `agentDiscovered` (agent: AgentIdentity)    a newly discovered peer
+ */
+export class BridgeManager extends EventEmitter {
   private readonly config: BridgeConfig;
   private readonly identity: Identity;
   private readonly hivesync: HiveSync;
@@ -17,6 +26,7 @@ export class BridgeManager {
   private isRunning = false;
 
   constructor(config: BridgeConfig, transport?: Transport) {
+    super();
     this.config = config;
     const identityDir =
       config.storagePath === ':memory:'
@@ -38,9 +48,10 @@ export class BridgeManager {
       await this.storage.initialize();
       await this.registerAgent();
 
-      // Persist agents we discover on the network.
+      // Persist agents we discover on the network, and notify listeners.
       this.hivesync.onAgentDiscovered(async (agent) => {
         await this.storage.saveAgent(agent);
+        this.emit('agentDiscovered', agent);
       });
       this.setupMessageHandlers();
 
@@ -102,14 +113,13 @@ export class BridgeManager {
   private setupMessageHandlers(): void {
     this.hivesync.onMessage(MessageType.TEXT, async (message) => {
       await this.storage.saveMessage(message);
-      logger.info(`Text from ${message.sender}: ${message.content?.text}`);
-      if (typeof message.content?.text === 'string' && message.content.text.toLowerCase().includes('ping')) {
-        await this.sendTextMessage(message.sender, 'pong');
-      }
+      this.emit('text', message);
+      this.emit('message', message);
     });
 
     this.hivesync.onMessage(MessageType.COMMAND, async (message) => {
       await this.storage.saveMessage(message);
+      this.emit('message', message);
       await this.handleCommand(message);
     });
 
@@ -153,13 +163,29 @@ export class BridgeManager {
   }
 
   async sendTextMessage(recipient: string, text: string): Promise<string> {
-    return this.hivesync.sendMessage({
+    const encrypted = recipient !== 'broadcast' && this.isAgentKnown(recipient);
+    const id = await this.hivesync.sendMessage({
       sender: this.config.agentId,
       recipient,
       type: MessageType.TEXT,
       content: { text },
       encrypted: recipient !== 'broadcast',
     });
+    // Record our own outgoing message so conversation history is complete.
+    await this.storage.saveMessage({
+      id,
+      sender: this.config.agentId,
+      recipient,
+      type: MessageType.TEXT,
+      content: { text },
+      timestamp: new Date(),
+      encrypted,
+    });
+    return id;
+  }
+
+  private isAgentKnown(agentId: string): boolean {
+    return this.hivesync.getKnownAgents().some((a) => a.id === agentId && !!a.encPublicKey);
   }
 
   async sendCommand(recipient: string, command: string, args: any = {}): Promise<string> {
@@ -173,13 +199,37 @@ export class BridgeManager {
   }
 
   async broadcastMessage(text: string): Promise<string> {
-    return this.hivesync.sendMessage({
+    const id = await this.hivesync.sendMessage({
       sender: this.config.agentId,
       recipient: 'broadcast',
       type: MessageType.TEXT,
       content: { text },
       encrypted: false,
     });
+    await this.storage.saveMessage({
+      id,
+      sender: this.config.agentId,
+      recipient: 'broadcast',
+      type: MessageType.TEXT,
+      content: { text },
+      timestamp: new Date(),
+      encrypted: false,
+    });
+    return id;
+  }
+
+  /** Full text conversation (both directions) with one agent, oldest first. */
+  async getConversation(peerId: string, limit = 500): Promise<Message[]> {
+    return this.storage.getConversation(peerId, this.config.agentId, limit);
+  }
+
+  /** All broadcast text messages seen/sent, oldest first. */
+  async getBroadcasts(limit = 500): Promise<Message[]> {
+    return this.storage.getBroadcasts(limit);
+  }
+
+  get agentId(): string {
+    return this.config.agentId;
   }
 
   /** Wait until an agent has been discovered (so encryption keys are known). */

@@ -118,13 +118,8 @@ export class StorageManager {
     );
   }
 
-  async getMessages(limit: number = 100, offset: number = 0): Promise<Message[]> {
-    const rows = await this.db.all(
-      `SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
-      [limit, offset]
-    );
-
-    return rows.map((row: any) => ({
+  private rowToMessage(row: any): Message {
+    return {
       id: row.id,
       sender: row.sender,
       recipient: row.recipient,
@@ -133,7 +128,38 @@ export class StorageManager {
       timestamp: new Date(row.timestamp),
       encrypted: row.encrypted === 1,
       signature: row.signature || undefined,
-    }));
+    };
+  }
+
+  async getMessages(limit: number = 100, offset: number = 0): Promise<Message[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+    return rows.map((row: any) => this.rowToMessage(row));
+  }
+
+  /** Text conversation (both directions) between self and a peer, oldest first. */
+  async getConversation(peerId: string, selfId: string, limit: number = 500): Promise<Message[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM messages
+       WHERE type = 'text'
+         AND ((sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?))
+       ORDER BY timestamp ASC LIMIT ?`,
+      [peerId, selfId, selfId, peerId, limit]
+    );
+    return rows.map((row: any) => this.rowToMessage(row));
+  }
+
+  /** All broadcast text messages, oldest first. */
+  async getBroadcasts(limit: number = 500): Promise<Message[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM messages
+       WHERE type = 'text' AND recipient = 'broadcast'
+       ORDER BY timestamp ASC LIMIT ?`,
+      [limit]
+    );
+    return rows.map((row: any) => this.rowToMessage(row));
   }
 
   async getUnreadMessages(): Promise<Message[]> {

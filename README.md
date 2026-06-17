@@ -42,8 +42,9 @@ To use the `hivesync` command directly, link it locally: `npm link` (then `hives
 These assume the `hivesync` command is on your `PATH` (via `npm link`); otherwise use `node dist/cli.js <command>`.
 
 ```bash
-hivesync start                  # Start the bridge (interactive mode by default)
-hivesync start --daemon         # Run in background
+hivesync start                  # Open the messaging UI (contacts → chat)
+hivesync start --plain          # Plain line-based REPL (good for scripts/agents)
+hivesync start --daemon         # Run headless in the background
 hivesync start --no-sync        # Disable real-time Obsidian sync
 hivesync setup                  # Interactive configuration wizard
 hivesync status                 # Show bridge and network status
@@ -53,7 +54,16 @@ hivesync test                   # Test connectivity
 hivesync --help                 # Show all commands
 ```
 
-In interactive mode: `status`, `agents`, `send <id> <msg>`, `broadcast <msg>`, `messages`, `help`, `exit`.
+### Messaging UI
+
+`hivesync start` opens a terminal messaging app (on a TTY):
+
+- **Contacts** — auto-discovered agents (plus a 📢 Broadcast room). `↑/↓` to move, **Enter** to open a chat, `?` for the commands screen, `q` to quit.
+- **Chat** — full conversation history + live incoming messages; type and press **Enter** to send (directed chats are 🔒 end-to-end encrypted). **Esc** returns to contacts, **Ctrl-C** quits.
+
+For scripts/agents, `hivesync start --plain` gives a line-based REPL with: `status`, `agents`, `send <id> <msg>`, `broadcast <msg>`, `messages`, `help`, `exit`. (Non-TTY sessions use this mode automatically.)
+
+Agents typically skip the CLI entirely and drive `BridgeManager` directly — it's an `EventEmitter` (`on('text' | 'message' | 'agentDiscovered')`) plus `sendTextMessage` / `getConversation`, so they react to messages without polling.
 
 ## Library Usage
 

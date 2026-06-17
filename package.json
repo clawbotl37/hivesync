@@ -42,6 +42,7 @@
   "homepage": "https://github.com/clawbotl37/hivesync#readme",
   "dependencies": {
     "@waku/sdk": "^0.0.36",
+    "blessed": "^0.1.81",
     "boxen": "^5.1.2",
     "chalk": "^4.1.2",
     "chokidar": "^3.6.0",
@@ -57,6 +58,7 @@
     "yaml": "^2.3.0"
   },
   "devDependencies": {
+    "@types/blessed": "^0.1.27",
     "@types/figlet": "^1.5.0",
     "@types/inquirer": "^8.2.0",
     "@types/jest": "^29.0.0",
