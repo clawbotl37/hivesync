@@ -46,20 +46,25 @@ from gateway.platforms.base import (
 from gateway.config import Platform
 
 
-def _read_db(db_path, last_id, our_agent):
-    """Query HiveSync SQLite DB for messages since last_id."""
+def _read_db(db_path, last_ts, our_agent):
+    """Query HiveSync SQLite DB for messages since last_ts (ISO timestamp).
+
+    last_ts may be empty for initial fetch (returns the single most recent
+    message).  Uses a *timestamp-based* cursor so UUID-ordering skew can
+    never cause missed messages.
+    """
     if not os.path.exists(db_path):
         return []
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        if last_id:
+        if last_ts:
             cur.execute(
                 "SELECT id, sender, content, timestamp "
-                "FROM messages WHERE id > ? AND sender != ? "
+                "FROM messages WHERE timestamp > ? AND sender != ? "
                 "ORDER BY timestamp ASC",
-                (last_id, our_agent),
+                (last_ts, our_agent),
             )
         else:
             cur.execute(
@@ -70,7 +75,7 @@ def _read_db(db_path, last_id, our_agent):
             )
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
-        if not last_id and rows:
+        if not last_ts and rows:
             rows.reverse()
         return rows
     except Exception as e:
@@ -82,17 +87,17 @@ async def _send_hivesync(cli_path, recipient, message):
     """Send a message via the HiveSync CLI."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "node", cli_path, "send", recipient, message,
+            "node", cli_path, "send", "--no-sync", recipient, message,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path(cli_path).parent.parent),
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return {"success": False, "error": "CLI timeout (30s)"}
+            return {"success": False, "error": "CLI timeout (60s)"}
 
         if proc.returncode == 0:
             output = stdout.decode().strip()
@@ -210,7 +215,7 @@ class HiveSyncAdapter(BasePlatformAdapter):
         )
         self.allowed_users = extra.get("allowed_users", [])
         self._allowed_set = {u.lower() for u in self.allowed_users if isinstance(u, str)}
-        self._last_seen_id = ""
+        self._last_seen_ts = ""
         self._poll_task = None
         self._last_poll_ts = 0.0
         self._known_agents = {}
@@ -245,9 +250,9 @@ class HiveSyncAdapter(BasePlatformAdapter):
             return False
         logger.info("HiveSync: starting poll loop for agent '%s' (interval=%ss)",
                      self.agent_id, self.poll_interval)
-        state_file = Path(self.home) / "data" / ".hermes-last-id"
+        state_file = Path(self.home) / "data" / ".hermes-last-ts"
         if state_file.exists():
-            self._last_seen_id = state_file.read_text().strip()
+            self._last_seen_ts = state_file.read_text().strip()
         self._poll_task = asyncio.create_task(self._poll_loop())
         return True
 
@@ -272,10 +277,10 @@ class HiveSyncAdapter(BasePlatformAdapter):
             await asyncio.sleep(self.poll_interval)
 
     async def _poll_once(self):
-        rows = _read_db(self.db_path, self._last_seen_id, self.agent_id)
+        rows = _read_db(self.db_path, self._last_seen_ts, self.agent_id)
         if not rows:
             return
-        last_id = ""
+        last_ts = ""
         for row in rows:
             msg_id = row["id"]
             sender = row["sender"]
@@ -299,13 +304,13 @@ class HiveSyncAdapter(BasePlatformAdapter):
                     if timestamp else datetime.now(),
             )
             await self.handle_message(event)
-            last_id = msg_id
-        if last_id and last_id > self._last_seen_id:
-            self._last_seen_id = last_id
+            last_ts = timestamp
+        if last_ts and last_ts > self._last_seen_ts:
+            self._last_seen_ts = last_ts
             try:
-                state_file = Path(self.home) / "data" / ".hermes-last-id"
+                state_file = Path(self.home) / "data" / ".hermes-last-ts"
                 state_file.parent.mkdir(parents=True, exist_ok=True)
-                state_file.write_text(last_id)
+                state_file.write_text(last_ts)
             except Exception:
                 pass
 
