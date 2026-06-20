@@ -163,7 +163,10 @@ export class BridgeManager extends EventEmitter {
     });
 
     this.hivesync.onMessage(MessageType.ACK, async (message) => {
-      logger.debug(`ACK from ${message.sender} for ${message.content?.originalMessageId}`);
+      const originalMessageId = message.content?.originalMessageId;
+      logger.debug(`ACK from ${message.sender} for ${originalMessageId}`);
+      // Surface delivery receipts so UIs can show a "delivered" marker.
+      if (originalMessageId) this.emit('ack', originalMessageId, message.sender);
     });
   }
 
