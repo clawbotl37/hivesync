@@ -351,7 +351,7 @@ export async function startTui(
     }
 
     const bubbleLine = (s: string): string =>
-      `${pad0}{${bg}-bg}{white-fg} ${s.padEnd(contentW)} {/}`;
+      `${pad0}{${bg}-bg}{bold}{white-fg} ${s.padEnd(contentW)} {/}`;
 
     for (const l of wrapped.length ? wrapped : ['']) chatLog.add(bubbleLine(l));
     // Light meta text so the timestamp/receipt stays legible on the bright bubble.

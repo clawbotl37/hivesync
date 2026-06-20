@@ -18,7 +18,7 @@ export const TG = {
   bubbleIn: '#182533', // incoming bubble
   bubbleOut: '#2B5278', // outgoing bubble (Telegram dark theme)
   imBlue: '#0B93F6', // iMessage outgoing (you)
-  imGreen: '#34C759', // iMessage incoming (them)
+  imGreen: '#1B5E20', // incoming — darkened for readability on terminal
   muted: '#6D7F8F',
   online: '#4FAE4E',
 };
