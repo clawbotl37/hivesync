@@ -17,6 +17,8 @@ export const TG = {
   panel: '#0E1621', // sidebar background
   bubbleIn: '#182533', // incoming bubble
   bubbleOut: '#2B5278', // outgoing bubble (Telegram dark theme)
+  imBlue: '#0B93F6', // iMessage outgoing (you)
+  imGreen: '#34C759', // iMessage incoming (them)
   muted: '#6D7F8F',
   online: '#4FAE4E',
 };
@@ -30,18 +32,6 @@ export function gradientBlue(block: string): string {
   return lines
     .map((line, i) => chalk.hex(GRADIENT[Math.min(i, GRADIENT.length - 1)])(line))
     .join('\n');
-}
-
-/** A compact honeycomb — the hive the agents plug into. */
-export function honeycomb(): string {
-  return [
-    '          __     __     __          ',
-    '         /  \\__ /  \\__ /  \\         ',
-    '         \\__/  \\__/  \\__/  \\        ',
-    '         /  \\__/  \\__/  \\__/        ',
-    '         \\__/  \\__/  \\__/  \\        ',
-    '            \\__/  \\__/  \\__/        ',
-  ].join('\n');
 }
 
 /** Tiny honeycomb tile for the "select a chat" empty state. */

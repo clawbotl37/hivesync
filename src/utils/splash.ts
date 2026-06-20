@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { BridgeManager } from '../core/bridge-manager';
-import { TG, wordmark, honeycomb, gradientBlue } from './ascii';
+import { TG, wordmark } from './ascii';
 
 /**
  * "Connecting to the hivemind" — an animated boot sequence that runs before
@@ -59,8 +59,6 @@ export async function runConnectSequence(bridge: BridgeManager, config: any): Pr
     // Clear + home, then paint the splash header.
     process.stdout.write('\x1b[2J\x1b[H');
   }
-  console.log();
-  console.log(gradientBlue(honeycomb()));
   console.log();
   console.log(wordmark('HiveSync'));
   console.log(

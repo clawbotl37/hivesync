@@ -43,6 +43,11 @@ export async function startTui(
   let pendingPeer: string | null = null;
   let filter = '';
   let rowToPeer: string[] = [];
+  // Messages rendered in the currently-open chat, kept so we can redraw when a
+  // delivery receipt (ACK) upgrades a ✓ to ✓✓.
+  let shown: Message[] = [];
+  let shownBroadcast = false;
+  const delivered = new Set<string>();
 
   // ===================================================================== bars
   const topBar = blessed.box({
@@ -305,24 +310,39 @@ export async function startTui(
     return out;
   }
 
+  // Re-render every bubble in the open chat from `shown` (used after a delivery
+  // receipt flips a checkmark, so we don't have to mutate individual lines).
+  function redrawChat(): void {
+    chatLog.setContent('');
+    if (shown.length) dayDivider();
+    shown.forEach((m) => renderMessage(m, shownBroadcast, true));
+    chatLog.setScrollPerc(100);
+    screen.render();
+  }
+
   // Render one message as a Telegram-style bubble inside the chat log.
-  function renderMessage(m: Message, showName = false): void {
+  function renderMessage(m: Message, showName = false, replaying = false): void {
     const me = m.sender === bridge.agentId;
     const paneW = (chatLog.width as number) || 50;
     const innerW = Math.max(20, paneW - 4);
     const maxContent = Math.max(12, Math.min(56, Math.floor(innerW * 0.62)));
 
+    // Remember live/new messages so a later ACK can trigger a faithful redraw.
+    if (!replaying) shown.push(m);
+
     const text = escapeTags(m.content?.text ?? '');
     const wrapped = wrapText(text, maxContent);
     const t = new Date(m.timestamp);
-    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${me ? ' ✓' : ''}${m.encrypted ? ' 🔒' : ''}`;
+    // For our own messages: ✓ = sent, ✓✓ = delivered (peer ACK received).
+    const receipt = me ? (delivered.has(m.id) ? ' ✓✓' : ' ✓') : '';
+    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${receipt}${m.encrypted ? ' 🔒' : ''}`;
 
     const contentW = Math.min(
       maxContent,
       Math.max(meta.length, ...wrapped.map((l) => l.length))
     );
     const bubbleW = contentW + 2; // 1 space padding each side
-    const bg = me ? TG.bubbleOut : TG.bubbleIn;
+    const bg = me ? TG.imBlue : TG.imGreen;
     const pad0 = me ? ' '.repeat(Math.max(0, innerW - bubbleW)) : '';
 
     if (showName && !me) {
@@ -334,7 +354,8 @@ export async function startTui(
       `${pad0}{${bg}-bg}{white-fg} ${s.padEnd(contentW)} {/}`;
 
     for (const l of wrapped.length ? wrapped : ['']) chatLog.add(bubbleLine(l));
-    chatLog.add(`${pad0}{${bg}-bg}{${TG.muted}-fg} ${meta.padStart(contentW)} {/}`);
+    // Light meta text so the timestamp/receipt stays legible on the bright bubble.
+    chatLog.add(`${pad0}{${bg}-bg}{#EAF4FF-fg} ${meta.padStart(contentW)} {/}`);
     chatLog.add(''); // breathing room between bubbles
   }
 
@@ -349,6 +370,7 @@ export async function startTui(
   function showEmptyState(): void {
     view = 'empty';
     openPeer = null;
+    shown = [];
     chatLog.setContent('');
     chatHeader.setContent(`{${TG.muted}-fg}  no chat selected{/}`);
     input.hide();
@@ -365,8 +387,14 @@ export async function startTui(
     screen.render();
   }
 
-  // Ask for the peer's password (session-only), then open the chat.
+  // Ask for the peer's password (session-only), then open the chat. If we
+  // already captured it earlier this session, go straight in — the password is
+  // remembered until the app closes.
   function openAgent(peer: string): void {
+    if (bridge.hasAgentPassword(peer)) {
+      void showChat(peer);
+      return;
+    }
     pendingPeer = peer;
     const nm = nameFor(peer);
     pwLabel.setContent(
@@ -383,6 +411,7 @@ export async function startTui(
   async function showQuarantine(): Promise<void> {
     view = 'quarantine';
     openPeer = null;
+    shown = [];
     unread.set(QUARANTINE, 0);
     input.hide();
     chatLog.setContent('');
@@ -413,6 +442,8 @@ export async function startTui(
     openPeer = peer;
     unread.set(peer, 0);
     chatLog.setContent('');
+    shown = [];
+    shownBroadcast = peer === BROADCAST;
     input.show();
 
     const nm = nameFor(peer);
@@ -518,8 +549,11 @@ export async function startTui(
           renderMessage(mkLocal(bridge.agentId, BROADCAST, text, false));
         } else {
           const encrypted = bridge.getKnownAgents().some((a) => a.id === openPeer && a.encPublicKey);
-          await bridge.sendTextMessage(openPeer, text);
-          renderMessage(mkLocal(bridge.agentId, openPeer, text, encrypted));
+          const msgId = await bridge.sendTextMessage(openPeer, text);
+          const local = mkLocal(bridge.agentId, openPeer, text, encrypted);
+          // Use the real message id so the peer's ACK upgrades ✓ → ✓✓.
+          if (msgId) local.id = msgId;
+          renderMessage(local);
         }
         lastMsg.set(openPeer, text);
         refreshContacts();
@@ -528,9 +562,15 @@ export async function startTui(
       }
     }
     if (view === 'chat') {
-      input.focus();
+      // Defer the refocus: blessed's submit handling (with inputOnFocus) tears
+      // down and rewinds focus on this same tick. Refocusing synchronously here
+      // races that teardown and leaves a second keypress listener attached — the
+      // cause of every character being typed twice after the first send.
       chatLog.setScrollPerc(100);
       screen.render();
+      setImmediate(() => {
+        if (view === 'chat') input.focus();
+      });
     }
   });
 
@@ -550,6 +590,24 @@ export async function startTui(
   input.key('tab', () => focusList());
   help.key(['escape', 'q', '?'], () => hideHelp());
   chatLog.key('escape', () => focusList());
+
+  // --- copy/paste ---------------------------------------------------------
+  // Mouse tracking lets the terminal scroll/click, but it also swallows native
+  // click-drag selection, so text can't be copied. Ctrl-X toggles mouse capture
+  // off: while off, select with the mouse and copy as usual, then toggle back.
+  let mouseOn = true;
+  function toggleMouse(): void {
+    mouseOn = !mouseOn;
+    if (mouseOn) screen.program.enableMouse();
+    else screen.program.disableMouse();
+    setFooter(
+      mouseOn
+        ? `{${TG.muted}-fg}mouse on · {bold}Ctrl-X{/bold} to select & copy text{/}`
+        : `{${TG.online}-fg}📋 select-and-copy mode — drag to select · {bold}Ctrl-X{/bold} to resume{/}`
+    );
+    screen.render();
+  }
+  screen.key(['C-x'], () => toggleMouse());
 
   // ===================================================== live network feed
   bridge.on('agentDiscovered', (_a: AgentIdentity) => {
@@ -572,6 +630,13 @@ export async function startTui(
       unread.set(key, (unread.get(key) || 0) + 1);
     }
     refreshContacts();
+  });
+
+  // Delivery receipt: the peer ACKed one of our messages → flip ✓ to ✓✓.
+  bridge.on('ack', (originalMessageId: string) => {
+    if (delivered.has(originalMessageId)) return;
+    delivered.add(originalMessageId);
+    if (view === 'chat' && shown.some((m) => m.id === originalMessageId)) redrawChat();
   });
 
   bridge.on('quarantine', () => {
@@ -642,10 +707,12 @@ function helpText(): string {
     '',
     `{${TG.blueLight}-fg}Messaging{/}`,
     '  type + Enter   send   ·   🔒 end-to-end encrypted',
-    '  wheel / drag   scroll history',
+    '  wheel          scroll history',
+    '  ✓ sent  ·  ✓✓ delivered (peer acknowledged)',
+    '  Ctrl-X         select-and-copy mode (frees the mouse)',
     '',
     `{${TG.blueLight}-fg}Access control{/}`,
-    '  Opening an agent asks for {bold}their password{/bold} (session-only).',
+    '  Opening an agent asks for {bold}their password{/bold} once per session.',
     '  Right password → your messages are trusted & executed.',
     '  Wrong/none → routed to {#E17076-fg}(!) Quarantine{/} on their side.',
     '',
