@@ -18,6 +18,9 @@ import { logger } from '../utils/logger';
 const AUTH_FIELD = '__auth';
 const AUTO_FIELD = '__auto';
 
+// How often the outbox poller checks the DB for messages to push over Waku.
+const OUTBOX_POLL_INTERVAL_MS = 2000;
+
 /**
  * Orchestrates identity, transport, storage and (optional) sync, and enforces
  * access control. Emits events so both humans (the TUI) and agents react live:
@@ -40,6 +43,8 @@ export class BridgeManager extends EventEmitter {
   // Outbound passwords for peers, entered this session and never persisted.
   private readonly sessionPasswords = new Map<string, string>();
   private realTimeSync: RealTimeSyncManager | null = null;
+  private outboxTimer: NodeJS.Timeout | null = null;
+  private processingOutbox = false;
   private isRunning = false;
 
   constructor(config: BridgeConfig, transport?: Transport) {
@@ -117,6 +122,13 @@ export class BridgeManager extends EventEmitter {
       }
 
       this.isRunning = true;
+
+      // Poll the DB for outgoing messages written directly by external adapters
+      // (e.g. the Hermes gateway) and push them over Waku. Separate timer so it
+      // never interferes with discovery/announce or message handling.
+      this.outboxTimer = setInterval(() => void this.processOutbox(), OUTBOX_POLL_INTERVAL_MS);
+      this.outboxTimer.unref?.();
+
       logger.success(`Bridge Manager started. Agent: ${this.config.agentName} (${this.config.agentId})`);
       return true;
     } catch (error) {
@@ -128,6 +140,10 @@ export class BridgeManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    if (this.outboxTimer) {
+      clearInterval(this.outboxTimer);
+      this.outboxTimer = null;
+    }
     if (this.realTimeSync) {
       await this.realTimeSync.stop().catch(() => undefined);
       this.realTimeSync = null;
@@ -135,6 +151,51 @@ export class BridgeManager extends EventEmitter {
     await this.hivesync.disconnect().catch(() => undefined);
     await this.storage.close();
     this.isRunning = false;
+  }
+
+  /**
+   * Drain the outbox: messages authored by us that are still undelivered. These
+   * are written straight to the DB by external adapters (the Hermes gateway)
+   * that never talk to the daemon, so the daemon is responsible for putting them
+   * on the wire. Sent via `hivesync.sendMessage` directly (NOT `sendText`, which
+   * would re-persist the message). On a successful Waku send we mark it
+   * delivered; if the send throws (e.g. a LightPush failure) we leave it
+   * undelivered so the next poll retries.
+   */
+  private async processOutbox(): Promise<void> {
+    if (!this.isRunning || this.processingOutbox) return;
+    this.processingOutbox = true;
+    try {
+      const pending = await this.storage.getPendingOutgoing(this.config.agentId);
+      for (const message of pending) {
+        const text = message.content?.text;
+        if (typeof text !== 'string') {
+          // Nothing we can send; mark delivered so it doesn't block the queue.
+          logger.warn(`Outbox message ${message.id} has no text payload; skipping`);
+          await this.storage.markDelivered(message.id);
+          continue;
+        }
+
+        try {
+          await this.hivesync.sendMessage({
+            sender: this.config.agentId,
+            recipient: message.recipient,
+            type: message.type,
+            content: { text },
+            encrypted: message.recipient !== 'broadcast',
+          });
+          await this.storage.markDelivered(message.id);
+          logger.info(`Outbox: delivered message ${message.id} to ${message.recipient}`);
+        } catch (error) {
+          // Leave delivered=0 so the next poll retries this message.
+          logger.warn(`Outbox: failed to send message ${message.id} to ${message.recipient}:`, error);
+        }
+      }
+    } catch (error) {
+      logger.error('Outbox polling failed:', error);
+    } finally {
+      this.processingOutbox = false;
+    }
   }
 
   private async registerAgent(): Promise<void> {
@@ -283,6 +344,8 @@ export class BridgeManager extends EventEmitter {
       encrypted: recipient !== 'broadcast',
     });
     // Record our own outgoing message (clean content) so history is complete.
+    // Mark it delivered immediately: we've already put it on the wire here, so
+    // the outbox poller must not pick it up and send it a second time.
     await this.storage.saveMessage({
       id,
       sender: this.config.agentId,
@@ -292,6 +355,7 @@ export class BridgeManager extends EventEmitter {
       timestamp: new Date(),
       encrypted: willEncrypt,
     });
+    await this.storage.markDelivered(id);
     return id;
   }
 
@@ -356,6 +420,7 @@ export class BridgeManager extends EventEmitter {
       timestamp: new Date(),
       encrypted: false,
     });
+    await this.storage.markDelivered(id);
     return id;
   }
 
