@@ -165,11 +165,11 @@ export interface BridgeConfig {
   agentId: string;
   agentName: string;
   storagePath: string;
-  waku: WakuConfig;
-  /** Discovery announce interval in seconds (<= 0 disables periodic announce). */
   syncInterval: number;
-  obsidian?: ObsidianConfig;
+  waku: WakuConfig;
   auth?: AuthConfig;
+  peerPasswords?: Record<string, string>;  // per-peer passwords for outbound auth
+  obsidian?: ObsidianConfig;
 }
 
 /** An untrusted message held in the quarantine folder (never executed). */

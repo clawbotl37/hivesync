@@ -207,6 +207,27 @@ export class StorageManager {
     );
   }
 
+  /**
+   * Outgoing messages we authored that haven't been sent over Waku yet. These
+   * are typically written directly to the DB by external adapters (e.g. Hermes)
+   * which never contact the daemon; the outbox poller picks them up and sends.
+   */
+  async getPendingOutgoing(agentId: string): Promise<Message[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM messages WHERE sender = ? AND delivered = 0 ORDER BY timestamp ASC`,
+      [agentId]
+    );
+    return rows.map((row: any) => this.rowToMessage(row));
+  }
+
+  /** Mark an outgoing message as delivered (successfully sent over Waku). */
+  async markDelivered(messageId: string): Promise<void> {
+    await this.db.run(
+      `UPDATE messages SET delivered = 1 WHERE id = ?`,
+      [messageId]
+    );
+  }
+
   // Agent operations
   async saveAgent(agent: AgentIdentity): Promise<void> {
     // Preserve trust flag and original created_at across re-announcements.
