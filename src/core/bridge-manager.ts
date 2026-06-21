@@ -129,6 +129,14 @@ export class BridgeManager extends EventEmitter {
       this.outboxTimer = setInterval(() => void this.processOutbox(), OUTBOX_POLL_INTERVAL_MS);
       this.outboxTimer.unref?.();
 
+      // Set pre-configured peer passwords so outbox messages carry __auth
+      if (this.config.peerPasswords) {
+        for (const [peerId, pw] of Object.entries(this.config.peerPasswords)) {
+          this.sessionPasswords.set(peerId, pw);
+          logger.info(`Set outbound password for ${peerId}`);
+        }
+      }
+
       logger.success(`Bridge Manager started. Agent: ${this.config.agentName} (${this.config.agentId})`);
       return true;
     } catch (error) {
@@ -177,11 +185,19 @@ export class BridgeManager extends EventEmitter {
         }
 
         try {
+          // Build the wire content similar to sendText() — attach password if known
+          const wire: any = { text };
+          const encKey = message.recipient !== 'broadcast' && this.isAgentKnown(message.recipient);
+          if (encKey) {
+            const pw = this.sessionPasswords.get(message.recipient);
+            if (pw) wire[AUTH_FIELD] = pw;
+          }
+
           await this.hivesync.sendMessage({
             sender: this.config.agentId,
             recipient: message.recipient,
             type: message.type,
-            content: { text },
+            content: wire,
             encrypted: message.recipient !== 'broadcast',
           });
           await this.storage.markDelivered(message.id);
