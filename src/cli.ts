@@ -424,6 +424,50 @@ program
     console.log(chalk.cyan('\n=== Test Complete ===\n'));
   });
 
+program
+  .command('approve <agentId>')
+  .description('Approve a pending handshake request')
+  .action(async (agentId) => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+
+      const approved = await bridge.approveHandshake(agentId);
+      if (approved) {
+        console.log(chalk.green(`✅ Handshake approved for ${agentId}`));
+      } else {
+        console.log(chalk.yellow(`No pending handshake request found for ${agentId}`));
+      }
+
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to approve handshake:', error);
+    }
+  });
+
+program
+  .command('deny <agentId>')
+  .description('Deny a pending handshake request')
+  .action(async (agentId) => {
+    try {
+      const config = await loadConfig();
+      const bridge = new BridgeManager(config);
+      await bridge.start();
+
+      const denied = await bridge.denyHandshake(agentId);
+      if (denied) {
+        console.log(chalk.yellow(`✗ Handshake denied for ${agentId}`));
+      } else {
+        console.log(chalk.yellow(`No pending handshake request found for ${agentId}`));
+      }
+
+      await bridge.stop();
+    } catch (error) {
+      logger.error('Failed to deny handshake:', error);
+    }
+  });
+
 program.parse(process.argv);
 
 // Show help if no arguments

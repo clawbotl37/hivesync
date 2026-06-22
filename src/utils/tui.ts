@@ -35,6 +35,7 @@ export async function startTui(
   });
 
   screen.program.alternateBuffer();
+  screen.program.clear();
 
   const unread = new Map<string, number>();
   const lastMsg = new Map<string, string>(); // peer → last message preview
@@ -597,7 +598,8 @@ export async function startTui(
 
   pwInput.on('submit', (value: string) => {
     if (pendingPeer) {
-      bridge.setAgentPassword(pendingPeer, (value || '').trim());
+      const pw = (value || '').trim();
+      if (pw) bridge.setAgentPassword(pendingPeer, pw);
       const peer = pendingPeer;
       pwInput.clearValue();
       pwPrompt.hide();

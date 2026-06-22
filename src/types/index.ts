@@ -56,6 +56,17 @@ export interface HandshakeAckPayload {
   agentVersion: string;
   capabilities: string[];
   timestamp: number;
+  reason?: string; // "pending_approval" when user approval is needed
+}
+
+export interface HandshakeApproval {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  capabilities: string[];
+  status: "pending" | "approved" | "denied";
+  created_at: Date;
+  responded_at?: Date;
 }
 
 /** A peer with a completed (or in-progress) handshake. */
