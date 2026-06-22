@@ -37,6 +37,9 @@ export class WakuTransport implements Transport {
   private readonly config: WakuConfig;
   private handler: RawMessageHandler | null = null;
   private started = false;
+  private storePollTimer: NodeJS.Timeout | null = null;
+  private lastStoreQueryTime: Date | null = null;
+  private storePolling = false;
 
   constructor(config: WakuConfig) {
     this.config = config;
@@ -84,21 +87,78 @@ export class WakuTransport implements Transport {
     }
     this.handler = handler;
 
-    const result = await this.node.filter.subscribe(this.decoder, (msg: DecodedMessage) => {
-      if (msg.payload && this.handler) {
-        this.handler(msg.payload);
-      }
-    });
+    let filterPeers = 0;
+    try {
+      const result = await this.node.filter.subscribe(this.decoder, (msg: DecodedMessage) => {
+        if (msg.payload && this.handler) {
+          this.handler(msg.payload);
+        }
+      });
 
-    if (result.error) {
-      throw new Error(`Waku filter subscribe failed: ${result.error}`);
+      if (result.error) {
+        logger.warn(`Waku filter subscribe failed: ${result.error}`);
+      }
+      const failures = result.results?.failures?.length ?? 0;
+      const successes = result.results?.successes?.length ?? 0;
+      filterPeers = successes;
+      if (successes === 0 && failures > 0) {
+        logger.warn('Waku filter subscribe: no peer accepted the subscription');
+      } else {
+        logger.info(`Subscribed to ${this.config.contentTopic} (${successes} peer(s))`);
+      }
+    } catch (err) {
+      logger.warn(`Filter subscribe error: ${(err as Error).message}`);
     }
-    const failures = result.results?.failures?.length ?? 0;
-    const successes = result.results?.successes?.length ?? 0;
-    if (successes === 0 && failures > 0) {
-      throw new Error('Waku filter subscribe: no peer accepted the subscription');
+
+    // Always start Store polling as a fallback/supplement for message retrieval.
+    // On the Waku testnet, Filter subscriptions often get 0 peers, so Store
+    // polling ensures we still receive messages.
+    this.startStorePolling();
+    if (filterPeers === 0) {
+      logger.info('Filter has 0 peers — relying on Store polling for message retrieval');
     }
-    logger.info(`Subscribed to ${this.config.contentTopic} (${successes} peer(s))`);
+  }
+
+  /**
+   * Poll the Waku Store protocol every 5 seconds for messages on our content
+   * topic that we may have missed (e.g. when Filter subscribe has 0 peers).
+   */
+  private startStorePolling(): void {
+    if (this.storePollTimer) return;
+    this.lastStoreQueryTime = new Date();
+    this.storePollTimer = setInterval(() => void this.pollStore(), 5000);
+    this.storePollTimer.unref?.();
+    logger.info('Started Store polling fallback for message retrieval');
+  }
+
+  private async pollStore(): Promise<void> {
+    if (this.storePolling || !this.node?.store || !this.decoder || !this.handler) return;
+    this.storePolling = true;
+    try {
+      const queryOpts: any = { pageSize: 50 };
+      if (this.lastStoreQueryTime) {
+        queryOpts.startTime = this.lastStoreQueryTime;
+      }
+      let receivedAny = false;
+      await this.node.store.queryWithOrderedCallback(
+        [this.decoder],
+        (msg: DecodedMessage) => {
+          if (msg.payload && this.handler) {
+            receivedAny = true;
+            this.handler(msg.payload);
+          }
+        },
+        queryOpts
+      );
+      if (receivedAny) {
+        logger.info('Store polling retrieved messages');
+      }
+    } catch (error) {
+      logger.warn(`Store polling error: ${(error as Error).message}`);
+    } finally {
+      this.lastStoreQueryTime = new Date();
+      this.storePolling = false;
+    }
   }
 
   /**
@@ -164,6 +224,10 @@ export class WakuTransport implements Transport {
   }
 
   async stop(): Promise<void> {
+    if (this.storePollTimer) {
+      clearInterval(this.storePollTimer);
+      this.storePollTimer = null;
+    }
     if (this.node) {
       try {
         await this.node.stop();

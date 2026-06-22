@@ -57,12 +57,27 @@ declare module '@waku/sdk' {
     peerId: PeerId;
     filter?: IFilter;
     lightPush?: ILightPush;
+    store?: IStore;
+    relay?: any;
     start(): Promise<void>;
     stop(): Promise<void>;
     waitForPeers(protocols?: string[], timeoutMs?: number): Promise<void>;
     isStarted(): boolean;
     isConnected(): boolean;
     getConnectedPeers(): Promise<Array<{ id: PeerId }>>;
+  }
+
+  export interface IStore {
+    queryWithOrderedCallback(
+      decoders: IDecoder | IDecoder[],
+      callback: (msg: IDecodedMessage) => void | Promise<void>,
+      options?: { pageSize?: number; startTime?: Date; endTime?: Date }
+    ): Promise<void>;
+    queryWithPromiseCallback(
+      decoders: IDecoder | IDecoder[],
+      callback: (msg: IDecodedMessage) => Promise<boolean | void>,
+      options?: { pageSize?: number; startTime?: Date; endTime?: Date }
+    ): Promise<void>;
   }
 
   export enum Protocols {
