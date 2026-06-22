@@ -405,7 +405,9 @@ export async function startTui(
     const t = new Date(m.timestamp);
     // For our own messages: ✓ = sent, ✓✓ = delivered (peer ACK received).
     const receipt = me ? (delivered.has(m.id) ? ' ✓✓' : ' ✓') : '';
-    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${receipt}${m.encrypted ? ' 🔒' : ''}`;
+    const tag = me ? '' : ' [HiveSync]';
+    const route = me ? `→ ${m.recipient}` : `${m.sender} →`;
+    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${tag} ${route}${receipt}${m.encrypted ? ' 🔒' : ''}`;
 
     const contentW = Math.min(
       maxContent,
