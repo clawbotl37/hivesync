@@ -405,7 +405,9 @@ export async function startTui(
     const t = new Date(m.timestamp);
     // For our own messages: ✓ = sent, ✓✓ = delivered (peer ACK received).
     const receipt = me ? (delivered.has(m.id) ? ' ✓✓' : ' ✓') : '';
-    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${receipt}${m.encrypted ? ' 🔒' : ''}`;
+    const tag = me ? '' : ' [HiveSync]';
+    const route = me ? `→ ${m.recipient}` : `${m.sender} →`;
+    const meta = `${pad(t.getHours())}:${pad(t.getMinutes())}${tag} ${route}${receipt}${m.encrypted ? ' 🔒' : ''}`;
 
     const contentW = Math.min(
       maxContent,
@@ -421,10 +423,10 @@ export async function startTui(
     }
 
     const bubbleLine = (s: string): string =>
-      `${pad0}{${bg}-bg}{#FFFFFF-fg}{bold} ${s.padEnd(contentW)} {/}`;
+      `${pad0}{${bg}-bg}{white-fg} ${s.padEnd(contentW)} {/}`;
 
     for (const l of wrapped.length ? wrapped : ['']) chatLog.add(bubbleLine(l));
-// The meta line (time · ✓ · lock) sits on the coloured bubble, so use a
+    // The meta line (time · ✓ · lock) sits on the coloured bubble, so use a
     // plain white fg — TG.muted grey is unreadable on both the green outgoing
     // and blue incoming backgrounds.
     chatLog.add(`${pad0}{${bg}-bg}{white-fg} ${meta.padStart(contentW)} {/}`);
