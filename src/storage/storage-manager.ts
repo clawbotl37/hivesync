@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
-import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus } from '../types';
+import { v4 as uuidv4 } from 'uuid';
+import { Message, AgentIdentity, ObsidianNote, SyncState, Contact, HandshakeStatus, HandshakeApproval } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -89,6 +90,19 @@ export class StorageManager {
       )
     `);
 
+    // Handshake approvals table
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS handshake_approvals (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        agent_name TEXT,
+        capabilities TEXT,
+        status TEXT DEFAULT "pending",
+        created_at DATETIME,
+        responded_at DATETIME
+      )
+    `);
+
     // Create indexes
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
@@ -97,6 +111,13 @@ export class StorageManager {
       CREATE INDEX IF NOT EXISTS idx_notes_path ON obsidian_notes(path);
       CREATE INDEX IF NOT EXISTS idx_notes_hash ON obsidian_notes(hash);
     `);
+
+    await this.migrateHandshakeApprovals();
+  }
+
+  /** Idempotent migration hook for future handshake_approvals schema changes. */
+  private async migrateHandshakeApprovals(): Promise<void> {
+    // Placeholder for future column additions — nothing to migrate yet.
   }
 
   /** Add handshake columns to a pre-existing agents table (idempotent). */
@@ -438,6 +459,64 @@ export class StorageManager {
       lastSync: new Date(row.last_sync),
       notesSynced: row.notes_synced,
       conflicts: row.conflicts,
+    };
+  }
+
+  // Handshake approval operations
+
+  async createHandshakeApproval(agentId: string, agentName: string, capabilities: string[]): Promise<string> {
+    const id = uuidv4();
+    await this.db.run(
+      `INSERT INTO handshake_approvals (id, agent_id, agent_name, capabilities, status, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?)`,
+      [id, agentId, agentName, JSON.stringify(capabilities), new Date().toISOString()]
+    );
+    return id;
+  }
+
+  async getPendingApprovals(): Promise<HandshakeApproval[]> {
+    const rows = await this.db.all(
+      `SELECT * FROM handshake_approvals WHERE status = 'pending' ORDER BY created_at ASC`
+    );
+    return rows.map((row: any) => this.rowToApproval(row));
+  }
+
+  async approveHandshakeByAgent(agentId: string): Promise<boolean> {
+    const result = await this.db.run(
+      `UPDATE handshake_approvals SET status = 'approved', responded_at = ?
+       WHERE agent_id = ? AND status = 'pending'`,
+      [new Date().toISOString(), agentId]
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  async denyHandshakeByAgent(agentId: string): Promise<boolean> {
+    const result = await this.db.run(
+      `UPDATE handshake_approvals SET status = 'denied', responded_at = ?
+       WHERE agent_id = ? AND status = 'pending'`,
+      [new Date().toISOString(), agentId]
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  async getRecentlyApproved(): Promise<HandshakeApproval[]> {
+    const cutoff = new Date(Date.now() - 30000).toISOString();
+    const rows = await this.db.all(
+      `SELECT * FROM handshake_approvals WHERE status = 'approved' AND responded_at > ?`,
+      [cutoff]
+    );
+    return rows.map((row: any) => this.rowToApproval(row));
+  }
+
+  private rowToApproval(row: any): HandshakeApproval {
+    return {
+      id: row.id,
+      agent_id: row.agent_id,
+      agent_name: row.agent_name ?? '',
+      capabilities: parseCapabilities(row.capabilities),
+      status: row.status as "pending" | "approved" | "denied",
+      created_at: new Date(row.created_at),
+      responded_at: row.responded_at ? new Date(row.responded_at) : undefined,
     };
   }
 
