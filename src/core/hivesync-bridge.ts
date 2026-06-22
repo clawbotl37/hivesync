@@ -52,6 +52,7 @@ export interface HandshakeInfo {
 export type MessageHandler = (message: Message) => void | Promise<void>;
 export type AgentDiscoveredHandler = (agent: AgentIdentity) => void | Promise<void>;
 export type HandshakeConfirmedHandler = (info: HandshakeInfo) => void | Promise<void>;
+export type HandshakeApprovalNeededHandler = (info: { agentId: string; agentName: string; capabilities: string[] }) => void | Promise<void>;
 
 /**
  * HiveSync messaging core. Sits on top of {@link WakuTransport} and provides:
@@ -68,6 +69,7 @@ export class HiveSync {
   private readonly messageHandlers = new Map<MessageType, MessageHandler>();
   private readonly agentDiscoveredHandlers: AgentDiscoveredHandler[] = [];
   private readonly handshakeConfirmedHandlers: HandshakeConfirmedHandler[] = [];
+  private readonly handshakeApprovalNeededHandlers: HandshakeApprovalNeededHandler[] = [];
   private readonly knownAgents = new Map<string, KnownAgent>();
   private readonly seenIds = new Set<string>();
   private readonly seenOrder: string[] = [];
@@ -124,6 +126,10 @@ export class HiveSync {
 
   onHandshakeConfirmed(handler: HandshakeConfirmedHandler): void {
     this.handshakeConfirmedHandlers.push(handler);
+  }
+
+  onHandshakeApprovalNeeded(handler: HandshakeApprovalNeededHandler): void {
+    this.handshakeApprovalNeededHandlers.push(handler);
   }
 
   getKnownAgents(): AgentIdentity[] {
@@ -398,7 +404,7 @@ export class HiveSync {
   }
 
   /** Reply to a HANDSHAKE_INIT, advertising our capabilities. */
-  async sendHandshakeAck(agentId: string, accepted: boolean): Promise<void> {
+  async sendHandshakeAck(agentId: string, accepted: boolean, reason?: string): Promise<void> {
     const payload: HandshakeAckPayload = {
       accepted,
       agentName: this.identity.agentName,
@@ -406,6 +412,7 @@ export class HiveSync {
       capabilities: AGENT_CAPABILITIES,
       timestamp: Date.now(),
     };
+    if (reason !== undefined) payload.reason = reason;
     await this.sendMessage({
       sender: this.identity.agentId,
       recipient: agentId,
@@ -413,7 +420,7 @@ export class HiveSync {
       content: payload,
       encrypted: false,
     });
-    logger.debug(`Handshake ack (accepted=${accepted}) sent to ${agentId}`);
+    logger.debug(`Handshake ack (accepted=${accepted}${reason ? `, reason=${reason}` : ''}) sent to ${agentId}`);
   }
 
   private async handleHandshakeInit(from: string, payload: HandshakeInitPayload): Promise<void> {
@@ -422,16 +429,19 @@ export class HiveSync {
     if (known) {
       known.capabilities = capabilities;
     }
-    // Keep it simple: always accept. Reply, then mark the peer confirmed.
-    await this.sendHandshakeAck(from, true).catch((e) =>
+    // Require explicit user approval before confirming. Send a pending ack.
+    await this.sendHandshakeAck(from, false, 'pending_approval').catch((e) =>
       logger.debug('Failed to send handshake ack:', e)
     );
     if (known) {
-      known.handshakeStatus = 'confirmed';
-      known.handshakeConfirmedAt = new Date();
+      known.handshakeStatus = 'pending';
     }
-    logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
-    await this.notifyHandshakeConfirmed(from);
+    const agentName = payload.agentName ?? from;
+    logger.info(`Handshake request from ${agentName} (${from}) — awaiting user approval`);
+    const approvalInfo = { agentId: from, agentName, capabilities };
+    for (const cb of this.handshakeApprovalNeededHandlers) {
+      await cb(approvalInfo);
+    }
   }
 
   private async handleHandshakeAck(from: string, payload: HandshakeAckPayload): Promise<void> {
@@ -439,12 +449,20 @@ export class HiveSync {
     const capabilities = Array.isArray(payload.capabilities) ? payload.capabilities : [];
     if (known) {
       known.capabilities = capabilities;
-      known.handshakeStatus = payload.accepted ? 'confirmed' : 'failed';
-      if (payload.accepted) known.handshakeConfirmedAt = new Date();
+      if (payload.accepted) {
+        known.handshakeStatus = 'confirmed';
+        known.handshakeConfirmedAt = new Date();
+      } else if (payload.reason === 'pending_approval') {
+        known.handshakeStatus = 'pending';
+      } else {
+        known.handshakeStatus = 'failed';
+      }
     }
     if (payload.accepted) {
       logger.success(`Handshake confirmed with ${payload.agentName ?? from} (${from})`);
       await this.notifyHandshakeConfirmed(from);
+    } else if (payload.reason === 'pending_approval') {
+      logger.info(`Handshake with ${payload.agentName ?? from} (${from}) awaiting user approval on the other side`);
     } else {
       logger.warn(`Handshake rejected by ${from}`);
     }
@@ -462,6 +480,20 @@ export class HiveSync {
     for (const cb of this.handshakeConfirmedHandlers) {
       await cb(info);
     }
+  }
+
+  /** Called by BridgeManager once the user approves a pending handshake. */
+  async completeHandshakeApproval(agentId: string): Promise<void> {
+    const known = this.knownAgents.get(agentId);
+    if (known) {
+      known.handshakeStatus = 'confirmed';
+      known.handshakeConfirmedAt = new Date();
+    }
+    await this.sendHandshakeAck(agentId, true).catch((e) =>
+      logger.debug('Failed to send approved handshake ack:', e)
+    );
+    logger.success(`Handshake approved and confirmed with ${known?.agentName ?? agentId} (${agentId})`);
+    await this.notifyHandshakeConfirmed(agentId);
   }
 
   /** Current handshake state for a peer, or null if the peer is unknown. */

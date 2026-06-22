@@ -56,6 +56,17 @@ export interface HandshakeAckPayload {
   agentVersion: string;
   capabilities: string[];
   timestamp: number;
+  reason?: string; // "pending_approval" when user approval is needed
+}
+
+export interface HandshakeApproval {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  capabilities: string[];
+  status: "pending" | "approved" | "denied";
+  created_at: Date;
+  responded_at?: Date;
 }
 
 /** A peer with a completed (or in-progress) handshake. */
@@ -165,11 +176,11 @@ export interface BridgeConfig {
   agentId: string;
   agentName: string;
   storagePath: string;
-  waku: WakuConfig;
-  /** Discovery announce interval in seconds (<= 0 disables periodic announce). */
   syncInterval: number;
-  obsidian?: ObsidianConfig;
+  waku: WakuConfig;
   auth?: AuthConfig;
+  peerPasswords?: Record<string, string>;  // per-peer passwords for outbound auth
+  obsidian?: ObsidianConfig;
 }
 
 /** An untrusted message held in the quarantine folder (never executed). */

@@ -9,7 +9,7 @@ import { verifyPassword } from './crypto';
 import { StorageManager } from '../storage/storage-manager';
 import { QuarantineStore } from '../storage/quarantine-store';
 import { RealTimeSyncManager } from '../sync/real-time-sync';
-import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage, Contact } from '../types';
+import { BridgeConfig, AgentIdentity, Message, MessageType, QuarantinedMessage, Contact, HandshakeApproval } from '../types';
 import { HandshakeInfo } from './hivesync-bridge';
 import { logger } from '../utils/logger';
 
@@ -44,6 +44,7 @@ export class BridgeManager extends EventEmitter {
   private readonly sessionPasswords = new Map<string, string>();
   private realTimeSync: RealTimeSyncManager | null = null;
   private outboxTimer: NodeJS.Timeout | null = null;
+  private approvalTimer: NodeJS.Timeout | null = null;
   private processingOutbox = false;
   private isRunning = false;
 
@@ -129,6 +130,46 @@ export class BridgeManager extends EventEmitter {
       this.outboxTimer = setInterval(() => void this.processOutbox(), OUTBOX_POLL_INTERVAL_MS);
       this.outboxTimer.unref?.();
 
+      // When a peer sends us a handshake_init, store the approval request in DB.
+      this.hivesync.onHandshakeApprovalNeeded(async ({ agentId, agentName, capabilities }) => {
+        await this.storage.createHandshakeApproval(agentId, agentName, capabilities);
+        logger.info(`Handshake approval needed for ${agentName} (${agentId}) — use 'hivesync approve ${agentId}'`);
+        this.emit('handshakeApprovalNeeded', { agentId, agentName, capabilities });
+      });
+
+      // Poll every 3s for approvals written to DB (e.g. by CLI approve command).
+      this.approvalTimer = setInterval(async () => {
+        try {
+          const approved = await this.storage.getRecentlyApproved();
+          for (const approval of approved) {
+            await this.hivesync.completeHandshakeApproval(approval.agent_id).catch((e) =>
+              logger.debug('Failed to complete handshake approval:', e)
+            );
+          }
+        } catch (e) {
+          logger.debug('Approval poll error:', e);
+        }
+      }, 3000);
+      this.approvalTimer.unref?.();
+
+      // Re-emit pending approvals from a prior run so handlers can surface them.
+      const pendingOnStart = await this.storage.getPendingApprovals();
+      for (const approval of pendingOnStart) {
+        this.emit('handshakeApprovalNeeded', {
+          agentId: approval.agent_id,
+          agentName: approval.agent_name,
+          capabilities: approval.capabilities,
+        });
+      }
+
+      // Set pre-configured peer passwords so outbox messages carry __auth
+      if (this.config.peerPasswords) {
+        for (const [peerId, pw] of Object.entries(this.config.peerPasswords)) {
+          this.sessionPasswords.set(peerId, pw);
+          logger.info(`Set outbound password for ${peerId}`);
+        }
+      }
+
       logger.success(`Bridge Manager started. Agent: ${this.config.agentName} (${this.config.agentId})`);
       return true;
     } catch (error) {
@@ -143,6 +184,10 @@ export class BridgeManager extends EventEmitter {
     if (this.outboxTimer) {
       clearInterval(this.outboxTimer);
       this.outboxTimer = null;
+    }
+    if (this.approvalTimer) {
+      clearInterval(this.approvalTimer);
+      this.approvalTimer = null;
     }
     if (this.realTimeSync) {
       await this.realTimeSync.stop().catch(() => undefined);
@@ -177,11 +222,19 @@ export class BridgeManager extends EventEmitter {
         }
 
         try {
+          // Build the wire content similar to sendText() — attach password if known
+          const wire: any = { text };
+          const encKey = message.recipient !== 'broadcast' && this.isAgentKnown(message.recipient);
+          if (encKey) {
+            const pw = this.sessionPasswords.get(message.recipient);
+            if (pw) wire[AUTH_FIELD] = pw;
+          }
+
           await this.hivesync.sendMessage({
             sender: this.config.agentId,
             recipient: message.recipient,
             type: message.type,
-            content: { text },
+            content: wire,
             encrypted: message.recipient !== 'broadcast',
           });
           await this.storage.markDelivered(message.id);
@@ -222,6 +275,9 @@ export class BridgeManager extends EventEmitter {
       await this.storage.saveMessage(msg);
       this.emit('text', msg);
       this.emit('message', msg);
+      if (!isAuto && this.config.auth?.autoReply) {
+        void this.sendText(msg.sender, this.config.auth.autoReply, { auto: true }).catch(() => undefined);
+      }
     });
 
     this.hivesync.onMessage(MessageType.COMMAND, async (message) => {
@@ -479,6 +535,27 @@ export class BridgeManager extends EventEmitter {
   /** A single persisted contact (with handshake details). */
   async getContact(agentId: string): Promise<Contact | null> {
     return this.storage.getContact(agentId);
+  }
+
+  /** All handshake requests awaiting user approval. */
+  async getPendingApprovals(): Promise<HandshakeApproval[]> {
+    return this.storage.getPendingApprovals();
+  }
+
+  /** Approve a pending handshake and immediately send the confirmed ack. */
+  async approveHandshake(agentId: string): Promise<boolean> {
+    const changed = await this.storage.approveHandshakeByAgent(agentId);
+    if (changed) {
+      await this.hivesync.completeHandshakeApproval(agentId).catch((e) =>
+        logger.debug('Failed to complete handshake approval:', e)
+      );
+    }
+    return changed;
+  }
+
+  /** Deny a pending handshake request. */
+  async denyHandshake(agentId: string): Promise<boolean> {
+    return this.storage.denyHandshakeByAgent(agentId);
   }
 
   async getUnreadMessages(): Promise<Message[]> {
