@@ -59,6 +59,10 @@ waku:
 `--host` is what spokes actually dial: a public IP, a DNS name, or — for the
 SSH reverse-tunnel setup — `127.0.0.1` (the tunnel endpoint on the spoke side).
 
+The hub persists its peer key (`./data/hub-peer.key` by default, or `--key
+<path>`), so its **peerId stays the same across restarts** and the
+`directPeers` line you give spokes never goes stale.
+
 ### Over the SSH reverse tunnel (works through the Aleph proxy)
 
 The Aleph proxy intercepts 80 and 443, but an SSH reverse tunnel doesn't care:
