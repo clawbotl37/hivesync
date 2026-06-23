@@ -29,10 +29,20 @@ function fakeBridge() {
   bridge.getQuarantineDir = () => '/tmp/quarantine';
   bridge.getQuarantineCount = async () => 0;
   bridge.getPendingApprovals = async () => [];
-  bridge.approveHandshake = async () => true;
-  bridge.denyHandshake = async () => true;
+  const approved: string[] = [];
+  const denied: string[] = [];
+  bridge.approveHandshake = async (id: string) => {
+    approved.push(id);
+    return true;
+  };
+  bridge.denyHandshake = async (id: string) => {
+    denied.push(id);
+    return true;
+  };
   bridge._agents = agents;
   bridge._sent = sent;
+  bridge._approved = approved;
+  bridge._denied = denied;
   return bridge;
 }
 
@@ -49,7 +59,7 @@ function fakeScreenIO() {
 describe('TUI (headless smoke)', () => {
   test('renders contacts and survives live events without throwing', async () => {
     const bridge = fakeBridge();
-    const { getBuf, opts } = fakeScreenIO();
+    const { getBuf, input, opts } = fakeScreenIO();
 
     // startTui never resolves; just kick it off.
     void startTui(bridge, opts as any);
@@ -94,6 +104,28 @@ describe('TUI (headless smoke)', () => {
       })
     ).not.toThrow();
     await tick();
+
+    // Pressing `y` must approve the pending handshake (regression: the modal's
+    // keys didn't fire while a textbox held grabKeys, so `y` did nothing).
+    input.write('y');
+    await tick();
+    expect(bridge._approved).toContain('agent-x');
+  });
+
+  test('pressing n denies the pending handshake', async () => {
+    const bridge = fakeBridge();
+    const { input, opts } = fakeScreenIO();
+    void startTui(bridge, opts as any);
+    await tick();
+    bridge.emit('handshakeApprovalNeeded', {
+      agentId: 'agent-y',
+      agentName: 'Agent Y',
+      capabilities: [],
+    });
+    await tick();
+    input.write('n');
+    await tick();
+    expect(bridge._denied).toContain('agent-y');
   });
 });
 

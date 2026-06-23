@@ -656,7 +656,12 @@ export async function startTui(
         `wants to start chatting with you.\n\n` +
         `{${TG.muted}-fg}capabilities:{/} ${escapeTags(caps)}`
     );
+    // End any in-progress textbox read and explicitly drop grabKeys, otherwise
+    // blessed keeps funneling every keypress into the chat draft and the modal's
+    // y/n never fire (the "press y does nothing" bug, esp. on macOS terminals).
     releaseInput();
+    (screen as any).grabKeys = false;
+    (screen.program as any).grabKeys = false;
     approval.show();
     approval.setFront();
     approval.focus();
@@ -674,16 +679,18 @@ export async function startTui(
     showNextApproval();
   }
 
-  // blessed registers element .key() handlers globally on the program, so these
-  // fire regardless of focus. Gate them on the modal being visible, otherwise a
-  // `y` typed in a normal chat would silently approve a queued/deferred request.
-  approval.key(['y', 'Y'], () => {
+  // Bind at the SCREEN level (not the element) so the keys fire reliably across
+  // blessed builds/terminals regardless of which element holds focus. Gate on
+  // the modal being visible so a `y` typed in a normal chat can't approve a
+  // queued/deferred request (while a chat input is reading, blessed funnels the
+  // keys to the textbox and these don't fire anyway).
+  screen.key(['y', 'Y'], () => {
     if (!approval.hidden) resolveApproval(true);
   });
-  approval.key(['n', 'N'], () => {
+  screen.key(['n', 'N'], () => {
     if (!approval.hidden) resolveApproval(false);
   });
-  approval.key('escape', () => {
+  screen.key('escape', () => {
     if (approval.hidden) return;
     // Defer the decision — keep it queued so the CLI/`approve` can handle it.
     approval.hide();
