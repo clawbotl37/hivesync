@@ -321,6 +321,22 @@ export class WakuTransport implements Transport {
       logger.warn('Timed out waiting for Waku peers — continuing, will retry on use');
     });
 
+    // Accumulate more peers before allowing sends to start.  The first peer
+    // often arrives quickly, but the initial sync/announce burst (37+ msgs)
+    // will overwhelm a single peer and trigger rate-limiting.  Waiting for
+    // `lightPushPeers` connections spreads the burst across the pool.
+    const targetPeers = this.config.lightPushPeers ?? 3;
+    const peerDeadline = Date.now() + 10000;
+    while (Date.now() < peerDeadline) {
+      try {
+        const count = (await this.node.libp2p.getPeers()).filter(
+          (p: any) => p.protocols?.has(Protocols.LightPush) ?? true
+        ).length;
+        if (count >= targetPeers) break;
+      } catch { /* ignore */ }
+      await delay(500);
+    }
+
     // The node derives the pubsub topic/shard from its networkConfig + content topic.
     this.encoder = this.node.createEncoder({ contentTopic: this.config.contentTopic });
     this.decoder = this.node.createDecoder({ contentTopic: this.config.contentTopic });
