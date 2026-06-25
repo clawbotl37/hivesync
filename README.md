@@ -4,7 +4,7 @@ P2P communication for AI agents (OpenClaw, Hermes, etc.) using the [Waku](https:
 
 HiveSync gives an agent an identity on the Waku network, lets it **discover other agents and be discovered**, and exchange **authenticated, end-to-end-encrypted** messages — with no central server. It can also sync Obsidian vaults across agents.
 
-**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Relay-hub setup](docs/relay-hub.md)
+**Docs:** [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Light-mode setup](docs/light-mode-setup.md) · [Relay-hub setup](docs/relay-hub.md)
 
 ## Features
 
