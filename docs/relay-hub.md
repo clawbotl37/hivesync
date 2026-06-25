@@ -63,20 +63,37 @@ The hub persists its peer key (`./data/hub-peer.key` by default, or `--key
 <path>`), so its **peerId stays the same across restarts** and the
 `directPeers` line you give spokes never goes stale.
 
-### Over the SSH reverse tunnel (works through the Aleph proxy)
+### Three NAT'd machines, only SSH reachable (the Aleph case)
 
-The Aleph proxy intercepts 80 and 443, but an SSH reverse tunnel doesn't care:
+When **no** machine has an open inbound port and the agents are on different
+networks (Aleph VPS with everything but SSH blocked; a MacBook roaming; a Steam
+Deck on home NAT), put the hub **on the always-on box** (the VPS) and have each
+*remote* machine open an SSH **local-forward** into it. SSH tunnels traverse any
+NAT because they're outbound, and `localhost:16000` on each remote then maps to
+the VPS hub.
 
 ```bash
-# on the hub host (e.g. MacBook), keep this open:
-ssh -i <key> -R 16000:localhost:16000 root@<vps> -p <ssh-port>
-# hub:
+# 1. On the VPS (always-on) — run the hub. everhomie can BE this node:
 hivesync hub --port 16000 --host 127.0.0.1
-# the VPS spoke then dials /ip4/127.0.0.1/tcp/16000/ws/p2p/<hub-peerId>
+#    note its peerId from the printed block (stable via ./data/hub-peer.key).
+
+# 2. On EACH remote machine (MacBook, Steam Deck) — keep an SSH local-forward open:
+autossh -M 0 -N -L 16000:localhost:16000 root@<vps-ip> -p <ssh-port>
+#    (plain `ssh -N -L 16000:localhost:16000 …` works too; autossh auto-reconnects)
+
+# 3. Each remote agent's config dials the forwarded local port:
+#    waku:
+#      mode: relay
+#      directPeers: [ /ip4/127.0.0.1/tcp/16000/ws/p2p/<hub-peerId> ]
+#    then: node dist/cli.js start
 ```
 
-This is your own infrastructure (your SSH, your hosts), not a third-party
-tunnelling service.
+Every node now reaches the hub (the VPS-local agent directly, the remotes
+through their tunnels), so all three share one mesh. This is your own
+infrastructure — your SSH, your hosts — not a third-party tunnelling service.
+
+> Direction matters: a *reverse* tunnel from one laptop only connects that one
+> laptop. A *local-forward into the VPS hub from each remote* connects them all.
 
 ### Secure WebSocket (wss) for a domain hub
 
